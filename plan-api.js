@@ -202,26 +202,37 @@
     var client = getClientOrThrow();
     await getUserOrThrow();
 
-    var result = await client
-      .rpc("save_plan_bundle", {
-        plan_payload: {
-          id: plan.id || null,
-          parent_plan_id: plan.parent_plan_id || null,
-          owner_role: plan.owner_role || plan.role_type,
-          role_type: plan.role_type,
-          full_name: plan.full_name || "",
-          start_date: plan.start_date || null,
-          calendar_start_date: plan.calendar_start_date || null,
-          target_pi: plan.target_pi || 0,
-          target_sales: plan.target_sales || 0,
-          info_fields: plan.info_fields || {},
-          checklist: plan.checklist || [],
-          status: plan.status || "submitted",
-          week_entries: plan.week_entries || [],
-          consolidation_entries: plan.consolidation_entries || []
-        }
-      })
-      .single();
+    async function runSave(payload) {
+      return client
+        .rpc("save_plan_bundle", {
+          plan_payload: payload
+        })
+        .single();
+    }
+
+    var payload = {
+      id: plan.id || null,
+      parent_plan_id: plan.parent_plan_id || null,
+      owner_role: plan.owner_role || plan.role_type,
+      role_type: plan.role_type,
+      full_name: plan.full_name || "",
+      start_date: plan.start_date || null,
+      calendar_start_date: plan.calendar_start_date || null,
+      target_pi: plan.target_pi || 0,
+      target_sales: plan.target_sales || 0,
+      info_fields: plan.info_fields || {},
+      checklist: plan.checklist || [],
+      status: plan.status || "submitted",
+      week_entries: plan.week_entries || [],
+      consolidation_entries: plan.consolidation_entries || []
+    };
+
+    var result = await runSave(payload);
+
+    if (result.error && payload.id && /Plan not found or not editable/i.test(result.error.message || "")) {
+      payload.id = null;
+      result = await runSave(payload);
+    }
 
     if (result.error) {
       throw new Error(result.error.message);

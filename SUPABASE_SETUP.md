@@ -18,3 +18,5 @@ Notes:
 - The narrowed parent dropdown depends on the new directory tables: `organizations`, `teams`, and `user_team_memberships`.
 - You need to seed those directory tables so users are assigned to the correct team/squad/platoon/o1 chain; otherwise the parent dropdown will be empty even though saving and direct plan ownership still work.
 - Use [supabase-directory-seed.sql](/c:/Users/asiapac1/Downloads/gutguard/supabase-directory-seed.sql) as a starting template for populating the directory tables.
+- For the common `Member -> Team Leader` empty-parent case, use [supabase-fix-member-parent.sql](/c:/Users/asiapac1/Downloads/gutguard/supabase-fix-member-parent.sql) and replace the two email addresses before running it.
+- If the parent dropdown stays empty or only shows the placeholder, run [supabase-parent-diagnostic.sql](/c:/Users/asiapac1/Downloads/gutguard/supabase-parent-diagnostic.sql) after replacing the sample user UUID and child role.

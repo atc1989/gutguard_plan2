@@ -114,6 +114,7 @@ body{font-family:'Barlow',sans-serif;background:var(--off);color:var(--text);min
 .f input:focus,.f select:focus{border-color:var(--blue-a);background:#fff;box-shadow:0 0 0 3px rgba(30,136,229,.1)}
 .f input[readonly]{background:var(--sky);color:var(--navy);font-weight:600;cursor:default}
 .submit-hint{font-size:.78rem;color:var(--muted);margin-top:10px;line-height:1.4;min-height:1.4em}
+.field-error{display:none;color:var(--danger);font-size:.75rem;line-height:1.2;margin-top:4px}
 .invalid label,
 .invalid .pib-lbl{color:var(--danger);font-weight:700}
 .invalid label::after,
@@ -121,6 +122,7 @@ body{font-family:'Barlow',sans-serif;background:var(--off);color:var(--text);min
 .invalid input,
 .invalid select,
 .invalid .pib-inp{border-color:var(--danger);box-shadow:0 0 0 3px rgba(192,57,43,.12)}
+.invalid .field-error{display:block}
 
 /* METRICS */
 .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:1.1rem}
@@ -380,12 +382,12 @@ body{font-family:'Barlow',sans-serif;background:var(--off);color:var(--text);min
       </div>
     </div>
     <div style="margin-top:.75rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <div id="auth-credentials" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <form id="auth-credentials" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap" onsubmit="handleAuthSubmit(event)">
         <input type="email" id="auth-email" placeholder="Email address">
         <input type="password" id="auth-password" placeholder="Password">
-        <button class="btn btp" onclick="handleSignIn()">Sign In</button>
-        <button class="btn bto" onclick="handleSignUp()">Sign Up</button>
-      </div>
+        <button class="btn btp" type="submit">Sign In</button>
+        <button class="btn bto" type="button" onclick="handleSignUp()">Sign Up</button>
+      </form>
       <div id="auth-signed-in" style="display:none;align-items:center;gap:10px;">
         <span>Signed in as <strong id="auth-email-display"></strong></span>
         <button class="btn bto" id="sign-out-btn" onclick="handleSignOut()">Sign Out</button>
@@ -716,7 +718,7 @@ function updateSaveStatus(type, state){
   var metaEl=document.getElementById(type+'-save-meta');
   if(!statusEl||!metaEl)return;
   var apiReady=!!(window.GutguardPlanApi&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured());
-  var storedRef=window.GutguardPlanModel&&window.GutguardPlanModel.getStoredPlanRef?window.GutguardPlanModel.getStoredPlanRef(type):null;
+  var storedRef=window.GutguardPlanModel&&window.GutguardPlanModel.getStoredPlanRef?window.GutguardPlanModel.getStoredPlanRef(type,getDraftScopeId()):null;
   var localDraft=window.GutguardPlanModel&&window.GutguardPlanModel.getLocalDraft?window.GutguardPlanModel.getLocalDraft(type,getDraftScopeId()):null;
   var meta=planMeta[type]||makePlanMeta();
   var tone='n-info';
@@ -836,11 +838,38 @@ function setFieldInvalid(el, invalid){
     wrapper.classList.toggle('invalid', !!invalid);
   }
 }
+function setFieldError(el, message){
+  if(!el) return;
+  var wrapper = el.closest('.f') || el.closest('.pib');
+  if(!wrapper) return;
+  var errorEl = wrapper.querySelector('.field-error');
+  if(!errorEl){
+    errorEl = document.createElement('div');
+    errorEl.className='field-error';
+    wrapper.appendChild(errorEl);
+  }
+  errorEl.textContent = message || '';
+  errorEl.style.display = message ? 'block' : 'none';
+}
+function clearFieldError(el){
+  if(!el) return;
+  var wrapper = el.closest('.f') || el.closest('.pib');
+  if(!wrapper) return;
+  var errorEl = wrapper.querySelector('.field-error');
+  if(errorEl){
+    errorEl.textContent='';
+    errorEl.style.display='none';
+  }
+}
 function clearValidationMarkers(type){
   var root = document.getElementById('forminner');
   if(!root) return;
   root.querySelectorAll('.invalid').forEach(function(el){
     el.classList.remove('invalid');
+  });
+  root.querySelectorAll('.field-error').forEach(function(el){
+    el.textContent='';
+    el.style.display='none';
   });
 }
 function updateValidationMarkers(type, errors){
@@ -848,10 +877,14 @@ function updateValidationMarkers(type, errors){
   if(!type) return;
 
   var fullName = document.getElementById('info-name');
-  setFieldInvalid(fullName, fullName && !fullName.value.trim());
+  var fullNameInvalid = fullName && !fullName.value.trim();
+  setFieldInvalid(fullName, fullNameInvalid);
+  setFieldError(fullName, fullNameInvalid ? 'Enter your name.' : '');
 
   var calStart = document.getElementById(type+'-cs');
-  setFieldInvalid(calStart, calStart && !calStart.value);
+  var calStartInvalid = calStart && !calStart.value;
+  setFieldInvalid(calStart, calStartInvalid);
+  setFieldError(calStart, calStartInvalid ? 'Set the calendar start date.' : '');
 
   var piEl = document.getElementById(type+'-tgt-pi');
   var salesEl = document.getElementById(type+'-tgt-sales');
@@ -860,6 +893,8 @@ function updateValidationMarkers(type, errors){
   var needTargets = piEl && salesEl && !piValue && !salesValue;
   setFieldInvalid(piEl, needTargets);
   setFieldInvalid(salesEl, needTargets);
+  setFieldError(piEl, needTargets ? 'Enter a pay-in or sales target.' : '');
+  setFieldError(salesEl, needTargets ? 'Enter a pay-in or sales target.' : '');
 
   if(PARENT_ROLE[type]){
     var parentSelect = document.getElementById(type+'-parent-plan-id');
@@ -867,6 +902,7 @@ function updateValidationMarkers(type, errors){
       var parentState = parentSelect.dataset.parentState || '';
       var shouldMarkInvalid = parentState === 'loaded' && !parentSelect.value;
       setFieldInvalid(parentSelect, shouldMarkInvalid);
+      setFieldError(parentSelect, shouldMarkInvalid ? 'Select a parent '+TYPE_LABEL[PARENT_ROLE[type]]+' plan.' : '');
     }
   }
 
@@ -993,6 +1029,10 @@ async function handleSignIn(){
     showToast(err&&err.message?err.message:'Sign in failed.');
   }
 }
+function handleAuthSubmit(event){
+  if(event)event.preventDefault();
+  handleSignIn();
+}
 async function handleSignUp(){
   try{
     var email=document.getElementById('auth-email').value.trim();
@@ -1019,10 +1059,14 @@ async function handleSignOut(){
 }
 async function populateParentOptions(type, selectedPlanId){
   var selectEl=document.getElementById(type+'-parent-plan-id');
-  if(!selectEl)return;
+  var errorEl=document.getElementById(type+'-parent-error');
+  var retryBtn=document.getElementById(type+'-parent-retry-btn');
+  if(!selectEl) return;
   var currentValue=selectedPlanId||selectEl.value||'';
   selectEl.dataset.parentState='';
-  setSelectMessage(selectEl,'No parent selected');
+  if(errorEl) errorEl.textContent='';
+  if(retryBtn) retryBtn.style.display='none';
+  setSelectMessage(selectEl,'Select a parent plan');
   if(!PARENT_ROLE[type]){
     selectEl.disabled=true;
     selectEl.dataset.parentState='not-required';
@@ -1041,9 +1085,10 @@ async function populateParentOptions(type, selectedPlanId){
       setSelectMessage(selectEl,'No '+(TYPE_LABEL[PARENT_ROLE[type]]||PARENT_ROLE[type])+' plans found');
       selectEl.disabled=true;
       selectEl.dataset.parentState='no-parents';
+      if(errorEl) errorEl.textContent='No parent plans are available yet. Make sure the parent user is assigned to the correct team chain and has already saved a parent plan.';
       return;
     }
-    setSelectMessage(selectEl,'No parent selected');
+    setSelectMessage(selectEl,'Select a parent plan');
     selectEl.dataset.parentState='loaded';
     parents.forEach(function(plan){
       var option=document.createElement('option');
@@ -1052,11 +1097,18 @@ async function populateParentOptions(type, selectedPlanId){
       option.textContent=(plan.full_name||'(No Name)')+' | '+(TYPE_LABEL[plan.role_type]||plan.role_type);
       selectEl.appendChild(option);
     });
+    if(!currentValue&&parents.length===1){
+      selectEl.value=parents[0].id;
+      setFormDirty(true,true);
+      scheduleDraftAutosave();
+    }
     return;
   }catch(err){
     setSelectMessage(selectEl,'Unable to load parent plans');
     selectEl.disabled=true;
     selectEl.dataset.parentState='load-error';
+    if(errorEl) errorEl.textContent = 'Unable to load parent plans. Check that you reran the latest schema, signed in, and seeded memberships and parent plans.';
+    if(retryBtn) retryBtn.style.display='inline-flex';
   }
 }
 async function refreshChildPlans(type){
@@ -1096,7 +1148,7 @@ async function startForm(type, explicitPlanId){
   renderConsolidation(type);
   computeProjections(type);
   updateSaveStatus(type,{message:'Form ready. Checking for a saved plan...',tone:'n-info'});
-  var storedRef=window.GutguardPlanModel&&window.GutguardPlanModel.getStoredPlanRef?window.GutguardPlanModel.getStoredPlanRef(type):null;
+  var storedRef=window.GutguardPlanModel&&window.GutguardPlanModel.getStoredPlanRef?window.GutguardPlanModel.getStoredPlanRef(type,getDraftScopeId()):null;
   var preferredPlanId=explicitPlanId||(storedRef&&storedRef.planId?storedRef.planId:null);
   if(window.GutguardPlanApi&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured()){
     if(explicitPlanId){
@@ -1273,11 +1325,13 @@ function buildForm(type){
       ${parentRole?`<div class="card hierarchy-wrap">
         <div class="sec-lbl" style="margin-bottom:.7rem">Hierarchy Link</div>
         <div class="fg">
-          <div class="f">
+          <div class="f parent-plan-field">
             <label>Parent ${TYPE_LABEL[parentRole]}</label>
             <select id="${p}-parent-plan-id" onchange="refreshSubmitButtonState('${p}')">
               <option value="">Loading ${TYPE_LABEL[parentRole]} plans...</option>
             </select>
+            <div class="field-error" id="${p}-parent-error" aria-live="polite"></div>
+            <button type="button" class="btn bto btn-sm" id="${p}-parent-retry-btn" onclick="populateParentOptions('${p}')" style="display:none;margin-top:8px">Retry</button>
           </div>
         </div>
       </div>`:''}
@@ -1881,14 +1935,22 @@ async function loadSavedPlan(silent, explicitPlanId){
     if(!silent)showToast('Configure Supabase before loading a saved plan.');
     return;
   }
-  var ref=explicitPlanId?{planId:explicitPlanId}:(window.GutguardPlanModel&&window.GutguardPlanModel.getStoredPlanRef?window.GutguardPlanModel.getStoredPlanRef(curType):null);
+  var ref=explicitPlanId?{planId:explicitPlanId}:(window.GutguardPlanModel&&window.GutguardPlanModel.getStoredPlanRef?window.GutguardPlanModel.getStoredPlanRef(curType,getDraftScopeId()):null);
   if(!ref||!ref.planId){
     updateSaveStatus(curType);
     if(!silent)showToast('No saved plan was found for this role on this device.');
     return;
   }
   updateSaveStatus(curType,{message:'Loading saved plan from Supabase...',tone:'n-info'});
-  var loaded=await window.GutguardPlanApi.loadPlanFromSupabase(ref.planId);
+  var loaded;
+  try{
+    loaded=await window.GutguardPlanApi.loadPlanFromSupabase(ref.planId);
+  }catch(err){
+    if(!explicitPlanId&&window.GutguardPlanModel&&window.GutguardPlanModel.clearStoredPlanRef){
+      window.GutguardPlanModel.clearStoredPlanRef(curType,getDraftScopeId());
+    }
+    throw err;
+  }
   clearDraftAutosaveTimer();
   suppressDraftPersistence=true;
   try{
@@ -1898,7 +1960,7 @@ async function loadSavedPlan(silent, explicitPlanId){
     suppressDraftPersistence=false;
   }
   planMeta[curType]={planId:loaded.id,status:loaded.status||'submitted',lastSavedAt:loaded.updated_at||loaded.created_at||null};
-  if(window.GutguardPlanModel&&window.GutguardPlanModel.rememberPlanRef)window.GutguardPlanModel.rememberPlanRef(curType,loaded);
+  if(window.GutguardPlanModel&&window.GutguardPlanModel.rememberPlanRef)window.GutguardPlanModel.rememberPlanRef(curType,loaded,getDraftScopeId());
   setFormDirty(false,true);
   await refreshChildPlans(curType);
   updateSaveStatus(curType);
@@ -1916,7 +1978,7 @@ async function savePlan(mode){
     window.GutguardPlanModel.validatePlanData(plan,{mode:mode});
     var saved=await window.GutguardPlanApi.savePlanToSupabase(plan);
     planMeta[curType]={planId:saved.id,status:saved.status||plan.status,lastSavedAt:saved.updated_at||saved.created_at||new Date().toISOString()};
-    if(window.GutguardPlanModel&&window.GutguardPlanModel.rememberPlanRef)window.GutguardPlanModel.rememberPlanRef(curType,saved);
+    if(window.GutguardPlanModel&&window.GutguardPlanModel.rememberPlanRef)window.GutguardPlanModel.rememberPlanRef(curType,saved,getDraftScopeId());
     clearLocalDraftForType(curType);
     setFormDirty(false,true);
     await refreshChildPlans(curType);
@@ -1925,6 +1987,10 @@ async function savePlan(mode){
     refreshDraftControls(curType);
     showToast('"'+(saved.full_name||'Plan')+'" '+(mode==='draft'?'saved as draft.':'submitted to Supabase.'));
   }catch(err){
+    if(/Plan not found or not editable/i.test((err&&err.message)||'')&&window.GutguardPlanModel&&window.GutguardPlanModel.clearStoredPlanRef){
+      window.GutguardPlanModel.clearStoredPlanRef(curType,getDraftScopeId());
+      planMeta[curType]=makePlanMeta();
+    }
     updateSaveStatus(curType,{message:'Save failed. '+((err&&err.message)?err.message:'Unknown error.'),tone:'n-danger'});
     showToast((err&&err.message)?err.message:'Failed to save plan.');
   }

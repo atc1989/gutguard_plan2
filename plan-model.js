@@ -46,17 +46,36 @@
     return scopeId || "guest";
   }
 
-  function getStoredPlanRef(roleType) {
-    return getStoredRefs()[roleType] || null;
+  function getStoredPlanRef(roleType, scopeId) {
+    var refs = getStoredRefs();
+    var scope = refs[normalizeScope(scopeId)] || {};
+    return scope[roleType] || null;
   }
 
-  function rememberPlanRef(roleType, savedPlan) {
+  function rememberPlanRef(roleType, savedPlan, scopeId) {
     var refs = getStoredRefs();
-    refs[roleType] = {
+    var scopeKey = normalizeScope(scopeId);
+    if (!refs[scopeKey]) {
+      refs[scopeKey] = {};
+    }
+    refs[scopeKey][roleType] = {
       planId: savedPlan.id,
       fullName: savedPlan.full_name || "",
       updatedAt: savedPlan.updated_at || savedPlan.created_at || null
     };
+    saveStoredRefs(refs);
+  }
+
+  function clearStoredPlanRef(roleType, scopeId) {
+    var refs = getStoredRefs();
+    var scopeKey = normalizeScope(scopeId);
+    if (!refs[scopeKey] || !refs[scopeKey][roleType]) {
+      return;
+    }
+    delete refs[scopeKey][roleType];
+    if (!Object.keys(refs[scopeKey]).length) {
+      delete refs[scopeKey];
+    }
     saveStoredRefs(refs);
   }
 
@@ -414,6 +433,7 @@
     hydratePlanData: hydratePlanData,
     getStoredPlanRef: getStoredPlanRef,
     rememberPlanRef: rememberPlanRef,
+    clearStoredPlanRef: clearStoredPlanRef,
     getLocalDraft: getLocalDraft,
     saveLocalDraft: saveLocalDraft,
     clearLocalDraft: clearLocalDraft
