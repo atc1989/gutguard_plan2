@@ -1,6 +1,8 @@
 (function () {
   var SUPABASE_URL = "https://nhifsoxmiqosuaiiprhd.supabase.co";
   var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5oaWZzb3htaXFvc3VhaWlwcmhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4OTkwNDEsImV4cCI6MjA5MTQ3NTA0MX0.fpvxGs0U-qzeM26FWJDdQYAAKIq2PGnHQIZ1Vrq3voE";
+  var STORAGE_KEY = "gutguard.supabase.auth";
+  var memoryStorage = {};
 
   function looksConfigured(value) {
     return !!value && value.indexOf("YOUR_") === -1 && value.indexOf("<") === -1;
@@ -12,6 +14,37 @@
       looksConfigured(SUPABASE_URL) &&
       looksConfigured(SUPABASE_ANON_KEY)
     );
+  }
+
+  function createSafeStorage() {
+    return {
+      getItem: function (key) {
+        try {
+          if (typeof window !== "undefined" && window.localStorage) {
+            return window.localStorage.getItem(key);
+          }
+        } catch (error) {}
+        return Object.prototype.hasOwnProperty.call(memoryStorage, key)
+          ? memoryStorage[key]
+          : null;
+      },
+      setItem: function (key, value) {
+        memoryStorage[key] = value;
+        try {
+          if (typeof window !== "undefined" && window.localStorage) {
+            window.localStorage.setItem(key, value);
+          }
+        } catch (error) {}
+      },
+      removeItem: function (key) {
+        delete memoryStorage[key];
+        try {
+          if (typeof window !== "undefined" && window.localStorage) {
+            window.localStorage.removeItem(key);
+          }
+        } catch (error) {}
+      }
+    };
   }
 
   function getClient() {
@@ -27,7 +60,9 @@
           auth: {
             persistSession: true,
             autoRefreshToken: true,
-            detectSessionInUrl: true
+            detectSessionInUrl: false,
+            storageKey: STORAGE_KEY,
+            storage: createSafeStorage()
           }
         }
       );

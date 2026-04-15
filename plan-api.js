@@ -40,6 +40,9 @@
       target_sales: Number(row.target_sales || 0),
       info_fields: row.info || {},
       checklist: Array.isArray(row.checklist) ? row.checklist : [],
+      review_notes: row.review_notes || "",
+      reviewed_at: row.reviewed_at || null,
+      reviewed_by: row.reviewed_by || null,
       created_at: row.created_at,
       updated_at: row.updated_at
     };
@@ -73,7 +76,7 @@
 
     var query = client
       .from("plans")
-      .select("id, role_type, full_name, status, updated_at, created_at, parent_plan_id, owner_role")
+      .select("id, role_type, full_name, status, updated_at, created_at, parent_plan_id, owner_role, review_notes, reviewed_at, reviewed_by")
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false });
 
@@ -85,7 +88,7 @@
     if (result.error && result.error.message && result.error.message.indexOf("parent_plan_id") !== -1) {
       var retryQuery = client
         .from("plans")
-        .select("id, role_type, full_name, status, updated_at, created_at, owner_role")
+        .select("id, role_type, full_name, status, updated_at, created_at, owner_role, review_notes, reviewed_at, reviewed_by")
         .eq("user_id", user.id)
         .order("updated_at", { ascending: false });
 
@@ -108,9 +111,30 @@
         updated_at: row.updated_at,
         created_at: row.created_at,
         parent_plan_id: row.parent_plan_id,
-        owner_role: row.owner_role
+        owner_role: row.owner_role,
+        review_notes: row.review_notes || "",
+        reviewed_at: row.reviewed_at || null,
+        reviewed_by: row.reviewed_by || null
       };
     });
+  }
+
+  async function listReviewQueue() {
+    var client = getClientOrThrow();
+    var user = await getUserOrThrow();
+
+    var result = await client
+      .from("plans")
+      .select("id, user_id, role_type, full_name, status, updated_at, created_at, parent_plan_id, owner_role, review_notes, reviewed_at, reviewed_by")
+      .neq("user_id", user.id)
+      .in("status", ["submitted", "needs_revision"])
+      .order("updated_at", { ascending: false });
+
+    if (result.error) {
+      throw new Error(result.error.message);
+    }
+
+    return (result.data || []).map(normalizePlanRow);
   }
 
   async function listPotentialParents(roleType) {
@@ -305,14 +329,52 @@
     return plan;
   }
 
+  async function deletePlanFromSupabase(planId) {
+    var client = getClientOrThrow();
+    await getUserOrThrow();
+
+    var result = await client
+      .from("plans")
+      .delete()
+      .eq("id", planId);
+
+    if (result.error) {
+      throw new Error(result.error.message);
+    }
+
+    return true;
+  }
+
+  async function reviewPlanInSupabase(planId, nextStatus, reviewNote) {
+    var client = getClientOrThrow();
+    await getUserOrThrow();
+
+    var result = await client
+      .rpc("review_plan", {
+        target_plan_id: planId,
+        next_status: nextStatus,
+        review_note: reviewNote || null
+      })
+      .single();
+
+    if (result.error) {
+      throw new Error(result.error.message);
+    }
+
+    return normalizePlanRow(result.data);
+  }
+
   window.GutguardPlanApi = {
     isConfigured: function () {
       return !!(window.GutguardSupabase && window.GutguardSupabase.isConfigured());
     },
     listPlans: listPlans,
+    listReviewQueue: listReviewQueue,
     listPotentialParents: listPotentialParents,
     listChildPlans: listChildPlans,
     savePlanToSupabase: savePlanToSupabase,
-    loadPlanFromSupabase: loadPlanFromSupabase
+    loadPlanFromSupabase: loadPlanFromSupabase,
+    deletePlanFromSupabase: deletePlanFromSupabase,
+    reviewPlanInSupabase: reviewPlanInSupabase
   };
 })();

@@ -124,7 +124,10 @@ create table if not exists plans (
   target_sales numeric(12,2) not null default 0,
   info jsonb not null default '{}'::jsonb,
   checklist jsonb not null default '[]'::jsonb,
-  status text not null default 'submitted' check (status in ('draft', 'submitted')),
+  status text not null default 'submitted' check (status in ('draft', 'submitted', 'approved', 'needs_revision')),
+  review_notes text,
+  reviewed_at timestamptz,
+  reviewed_by uuid references auth.users(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint plans_no_self_parent check (parent_plan_id is null or parent_plan_id <> id)
@@ -133,6 +136,9 @@ create table if not exists plans (
 alter table plans add column if not exists user_id uuid references auth.users(id) on delete cascade;
 alter table plans add column if not exists parent_plan_id uuid references plans(id) on delete set null;
 alter table plans add column if not exists owner_role text;
+alter table plans add column if not exists review_notes text;
+alter table plans add column if not exists reviewed_at timestamptz;
+alter table plans add column if not exists reviewed_by uuid references auth.users(id) on delete set null;
 
 do $$
 begin
@@ -148,6 +154,11 @@ begin
   end if;
 end;
 $$;
+
+alter table plans drop constraint if exists plans_status_check;
+alter table plans
+  add constraint plans_status_check
+  check (status in ('draft', 'submitted', 'approved', 'needs_revision'));
 
 create table if not exists plan_week_entries (
   id uuid primary key default gen_random_uuid(),
@@ -383,6 +394,7 @@ $$;
 create or replace function save_plan_bundle(plan_payload jsonb)
 returns public.plans
 language plpgsql
+security definer
 set search_path = public
 as $$
 declare
@@ -422,7 +434,10 @@ begin
       coalesce((plan_payload->>'target_sales')::numeric, 0),
       coalesce(plan_payload->'info_fields', '{}'::jsonb),
       coalesce(plan_payload->'checklist', '[]'::jsonb),
-      coalesce(nullif(plan_payload->>'status', ''), 'submitted')
+      case
+        when coalesce(nullif(plan_payload->>'status', ''), 'submitted') = 'draft' then 'draft'
+        else 'submitted'
+      end
     )
     returning * into saved_plan;
   else
@@ -438,7 +453,12 @@ begin
       target_sales = coalesce((plan_payload->>'target_sales')::numeric, 0),
       info = coalesce(plan_payload->'info_fields', '{}'::jsonb),
       checklist = coalesce(plan_payload->'checklist', '[]'::jsonb),
-      status = coalesce(nullif(plan_payload->>'status', ''), 'submitted'),
+      status = case
+        when coalesce(nullif(plan_payload->>'status', ''), 'submitted') = 'draft' then 'draft'
+        else 'submitted'
+      end,
+      reviewed_at = null,
+      reviewed_by = null,
       updated_at = now()
     where id = target_plan_id
       and user_id = auth.uid()
@@ -506,8 +526,51 @@ begin
 end;
 $$;
 
+create or replace function review_plan(
+  target_plan_id uuid,
+  next_status text,
+  review_note text default null
+)
+returns public.plans
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  reviewed_plan public.plans%rowtype;
+begin
+  if auth.uid() is null then
+    raise exception 'Please sign in before reviewing plans.';
+  end if;
+
+  if next_status not in ('approved', 'needs_revision') then
+    raise exception 'Unsupported review status.';
+  end if;
+
+  update public.plans
+  set
+    status = next_status,
+    review_notes = nullif(review_note, ''),
+    reviewed_at = now(),
+    reviewed_by = auth.uid(),
+    updated_at = now()
+  where id = target_plan_id
+    and user_id <> auth.uid()
+    and can_read_plan(id)
+    and status <> 'draft'
+  returning * into reviewed_plan;
+
+  if reviewed_plan.id is null then
+    raise exception 'Plan not found or not reviewable.';
+  end if;
+
+  return reviewed_plan;
+end;
+$$;
+
 grant execute on function list_potential_parent_plans(text) to authenticated;
 grant execute on function save_plan_bundle(jsonb) to authenticated;
+grant execute on function review_plan(uuid, text, text) to authenticated;
 
 drop trigger if exists plans_set_updated_at on plans;
 create trigger plans_set_updated_at
@@ -645,3 +708,13 @@ create policy users_delete_own_plan_consolidation_entries
 on plan_consolidation_entries
 for delete
 using (can_edit_plan(plan_id));
+
+grant usage on schema public to anon, authenticated;
+
+grant select on public.organizations to authenticated;
+grant select on public.teams to authenticated;
+grant select on public.user_team_memberships to authenticated;
+
+grant select, insert, update, delete on public.plans to authenticated;
+grant select, insert, update, delete on public.plan_week_entries to authenticated;
+grant select, insert, update, delete on public.plan_consolidation_entries to authenticated;

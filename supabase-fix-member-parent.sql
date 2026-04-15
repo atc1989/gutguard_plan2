@@ -6,7 +6,7 @@
 -- 3. Ensures the leader has at least one leader plan so the member dropdown can populate.
 --
 -- How to use:
--- 1. Replace the two email addresses in the settings CTE.
+-- 1. Replace the two email addresses in the set_config(...) block below.
 -- 2. Run this whole file in the Supabase SQL editor.
 -- 3. Sign in as the member user and reopen the Member form.
 --
@@ -14,10 +14,48 @@
 -- - This assumes you already ran the latest supabase-schema.sql.
 -- - The leader draft plan created here is only a bootstrap record. The leader can later open it in the app and complete it properly.
 
+select
+  set_config('gutguard.member_email', 'erikajayme0330@gmail.com', false),
+  set_config('gutguard.leader_email', 'erikajay0330@yahoo.com', false);
+
+do $$
+declare
+  member_email_value text := current_setting('gutguard.member_email', true);
+  leader_email_value text := current_setting('gutguard.leader_email', true);
+begin
+  if member_email_value is null or trim(member_email_value) = '' then
+    raise exception 'Member email is blank in supabase-fix-member-parent.sql.';
+  end if;
+
+  if leader_email_value is null or trim(leader_email_value) = '' then
+    raise exception 'Leader email is blank in supabase-fix-member-parent.sql.';
+  end if;
+
+  if lower(member_email_value) = lower(leader_email_value) then
+    raise exception 'Member and leader emails must be different. Current value: %', member_email_value;
+  end if;
+
+  if not exists (
+    select 1
+    from auth.users
+    where lower(email) = lower(member_email_value)
+  ) then
+    raise exception 'Member user % does not exist in auth.users.', member_email_value;
+  end if;
+
+  if not exists (
+    select 1
+    from auth.users
+    where lower(email) = lower(leader_email_value)
+  ) then
+    raise exception 'Leader user % does not exist in auth.users.', leader_email_value;
+  end if;
+end $$;
+
 with settings as (
   select
-    'erikajayme0330@gmail.com'::text as member_email,
-    'erikajay0330@yahoo.com'::text as leader_email,
+    current_setting('gutguard.member_email')::text as member_email,
+    current_setting('gutguard.leader_email')::text as leader_email,
     'Gutguard'::text as organization_name,
     'gutguard-main'::text as organization_code,
     'Davao O1'::text as o1_name,

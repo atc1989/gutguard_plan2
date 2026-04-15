@@ -11,7 +11,7 @@
 
 with input as (
   select
-    '00000000-0000-0000-0000-000000000001'::uuid as child_user_id,
+    '3c89a9e8-4a47-4d72-ad6b-8e81ca634e91'::uuid as child_user_id,
     'member'::text as child_role_type
 ),
 params as (
@@ -75,7 +75,7 @@ from params;
 
 with input as (
   select
-    '00000000-0000-0000-0000-000000000001'::uuid as child_user_id,
+    '3c89a9e8-4a47-4d72-ad6b-8e81ca634e91'::uuid as child_user_id,
     'member'::text as child_role_type
 )
 select
@@ -92,7 +92,7 @@ join input i on i.child_user_id = m.user_id;
 
 with input as (
   select
-    '00000000-0000-0000-0000-000000000001'::uuid as child_user_id,
+    '3c89a9e8-4a47-4d72-ad6b-8e81ca634e91'::uuid as child_user_id,
     'member'::text as child_role_type
 ),
 params as (
@@ -144,7 +144,7 @@ order by parent_team_name, parent_user_id;
 
 with input as (
   select
-    '00000000-0000-0000-0000-000000000001'::uuid as child_user_id,
+    '3c89a9e8-4a47-4d72-ad6b-8e81ca634e91'::uuid as child_user_id,
     'member'::text as child_role_type
 ),
 params as (
@@ -200,6 +200,101 @@ left join public.plans pl
   on pl.user_id = cpu.parent_user_id
  and pl.role_type = cpu.expected_parent_role
 order by cpu.parent_team_name, pl.updated_at desc nulls last;
+
+-- Explicit validity check for the selected child, parent, and parent plan.
+-- Replace child_user_id, parent_user_id, and parent_plan_id as needed.
+with input as (
+  select
+    '3c89a9e8-4a47-4d72-ad6b-8e81ca634e91'::uuid as child_user_id,
+    'member'::text as child_role_type,
+    'fbf73cc4-6ec9-4f63-bcf6-23862fb3a0a4'::uuid as parent_user_id,
+    'e4cd3163-02e2-41d8-bb93-e22d51af5f3c'::uuid as parent_plan_id
+),
+params as (
+  select
+    child_user_id,
+    child_role_type,
+    public.expected_parent_role(child_role_type) as expected_parent_role,
+    public.current_unit_type_for_role(child_role_type) as child_unit_type,
+    public.parent_unit_type_for_role(child_role_type) as parent_unit_type,
+    parent_user_id,
+    parent_plan_id
+  from input
+),
+child_membership as (
+  select
+    m.user_id as child_user_id,
+    m.organization_id as child_organization_id,
+    m.team_id as child_team_id,
+    t.name as child_team_name,
+    t.unit_type as child_team_unit_type,
+    t.parent_team_id as child_parent_team_id
+  from public.user_team_memberships m
+  join public.teams t on t.id = m.team_id
+  join params p on p.child_user_id = m.user_id
+),
+parent_membership as (
+  select
+    m.user_id as parent_user_id,
+    m.organization_id as parent_organization_id,
+    m.team_id as parent_team_id,
+    t.name as parent_team_name,
+    t.unit_type as parent_team_unit_type,
+    t.parent_team_id as parent_parent_team_id
+  from public.user_team_memberships m
+  join public.teams t on t.id = m.team_id
+  join params p on p.parent_user_id = m.user_id
+),
+parent_plan as (
+  select
+    p.id as parent_plan_id,
+    p.user_id as parent_plan_user_id,
+    p.role_type as parent_plan_role_type,
+    p.status as parent_plan_status,
+    p.full_name as parent_plan_full_name,
+    p.parent_plan_id as parent_plan_parent_plan_id
+  from public.plans p
+  join params on p.id = params.parent_plan_id
+),
+validity as (
+  select
+    p.child_user_id,
+    p.child_role_type,
+    p.expected_parent_role,
+    cp.child_team_id,
+    cp.child_team_unit_type,
+    cp.child_parent_team_id,
+    pp.parent_user_id,
+    pp.parent_team_id,
+    pp.parent_team_unit_type,
+    p.parent_plan_id,
+    pl.parent_plan_role_type,
+    pl.parent_plan_status,
+    case
+      when pl.parent_plan_role_type = p.expected_parent_role then true
+      else false
+    end as parent_plan_role_matches,
+    case
+      when p.child_role_type = 'member'
+        and pp.parent_team_id = cp.child_team_id then true
+      when p.child_role_type in ('leader','squad','platoon')
+        and pp.parent_team_id = cp.child_parent_team_id then true
+      else false
+    end as parent_team_link_matches,
+    case
+      when pl.parent_plan_role_type = p.expected_parent_role
+        and (
+          (p.child_role_type = 'member' and pp.parent_team_id = cp.child_team_id)
+          or (p.child_role_type in ('leader','squad','platoon') and pp.parent_team_id = cp.child_parent_team_id)
+        ) then true
+      else false
+    end as explicit_link_valid
+  from params p
+  left join child_membership cp on cp.child_user_id = p.child_user_id
+  left join parent_membership pp on pp.parent_user_id = p.parent_user_id
+  left join parent_plan pl on pl.parent_plan_id = p.parent_plan_id
+)
+select * from validity;
 
 -- Optional helper: list auth users so you can find the real UUIDs to use above.
 -- select id, email, created_at from auth.users order by created_at desc;
