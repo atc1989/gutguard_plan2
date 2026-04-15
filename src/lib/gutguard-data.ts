@@ -8,10 +8,10 @@ const projectRoot = path.resolve(__dirname, "../../");
 export const legacyHtmlPath = path.join(projectRoot, "gutguard_90day_plan (4).html");
 
 export const legacyScriptPaths: Record<string, string> = {
-  "supabase-config.js": path.join(projectRoot, "supabase-config.js"),
-  "plan-model.js": path.join(projectRoot, "plan-model.js"),
-  "plan-api.js": path.join(projectRoot, "plan-api.js"),
-  "gutguard-app.js": path.join(projectRoot, "gutguard-app.js")
+  "supabase-config.js": path.join(projectRoot, "public", "legacy", "supabase-config.js"),
+  "plan-model.js": path.join(projectRoot, "public", "legacy", "plan-model.js"),
+  "plan-api.js": path.join(projectRoot, "public", "legacy", "plan-api.js"),
+  "gutguard-app.js": path.join(projectRoot, "public", "legacy", "gutguard-app.js")
 };
 
 export const legacyClientScriptNames = [
