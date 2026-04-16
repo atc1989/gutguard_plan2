@@ -1,6 +1,11 @@
 (function () {
-  var SUPABASE_URL = "https://nhifsoxmiqosuaiiprhd.supabase.co";
-  var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5oaWZzb3htaXFvc3VhaWlwcmhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4OTkwNDEsImV4cCI6MjA5MTQ3NTA0MX0.fpvxGs0U-qzeM26FWJDdQYAAKIq2PGnHQIZ1Vrq3voE";
+  var fallbackConfig = {
+    supabaseUrl: "https://nhifsoxmiqosuaiiprhd.supabase.co",
+    supabaseAnonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5oaWZzb3htaXFvc3VhaWlwcmhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4OTkwNDEsImV4cCI6MjA5MTQ3NTA0MX0.fpvxGs0U-qzeM26FWJDdQYAAKIq2PGnHQIZ1Vrq3voE"
+  };
+  var runtimeConfig = window.__GUTGUARD_ENV || {};
+  var SUPABASE_URL = runtimeConfig.supabaseUrl || fallbackConfig.supabaseUrl;
+  var SUPABASE_ANON_KEY = runtimeConfig.supabaseAnonKey || fallbackConfig.supabaseAnonKey;
   var STORAGE_KEY = "gutguard.supabase.auth";
   var memoryStorage = {};
 
@@ -103,14 +108,17 @@
     return result.data;
   }
 
-  async function signUpWithPassword(email, password) {
+  async function signUpWithPassword(email, password, metadata) {
     var client = getClient();
     if (!client) {
       throw new Error("Supabase is not configured.");
     }
     var result = await client.auth.signUp({
       email: email,
-      password: password
+      password: password,
+      options: {
+        data: metadata || {}
+      }
     });
     if (result.error) {
       throw result.error;

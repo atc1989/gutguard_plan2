@@ -3,10 +3,14 @@ import AddMemberModal from "./AddMemberModal";
 import FormScreen from "./FormScreen";
 import Header from "./Header";
 import HomeScreen from "./HomeScreen";
-import { legacyClientScriptNames } from "@/lib/gutguard-data";
-import { getLegacyFooterMarkup } from "@/lib/gutguard-utils";
+import { getLegacyClientScripts, getLegacyFooterMarkup } from "@/lib/gutguard-utils";
 
 const footerMarkup = getLegacyFooterMarkup();
+const legacyClientScripts = getLegacyClientScripts();
+const runtimeEnv = {
+  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+  supabaseAnonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+};
 
 export default function GutguardPlanner() {
   return (
@@ -20,8 +24,13 @@ export default function GutguardPlanner() {
         src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
         strategy="afterInteractive"
       />
-      {legacyClientScriptNames.map((scriptName) => (
-        <Script key={scriptName} src={`/legacy/${scriptName}`} strategy="afterInteractive" />
+      <Script id="gutguard-runtime-env" strategy="afterInteractive">
+        {`window.__GUTGUARD_ENV = ${JSON.stringify(runtimeEnv)};`}
+      </Script>
+      {legacyClientScripts.map((script) => (
+        <Script key={script.name} id={`legacy-${script.name}`} strategy="afterInteractive">
+          {script.content}
+        </Script>
       ))}
     </>
   );

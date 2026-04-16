@@ -103,14 +103,17 @@
     return result.data;
   }
 
-  async function signUpWithPassword(email, password) {
+  async function signUpWithPassword(email, password, metadata) {
     var client = getClient();
     if (!client) {
       throw new Error("Supabase is not configured.");
     }
     var result = await client.auth.signUp({
       email: email,
-      password: password
+      password: password,
+      options: {
+        data: metadata || {}
+      }
     });
     if (result.error) {
       throw result.error;

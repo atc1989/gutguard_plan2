@@ -205,10 +205,10 @@ function getFriendlySaveError(err){
   if(/row-level security policy.*plans/i.test(raw)){
     if(curType&&PARENT_ROLE[curType]){
       if(curType==='member'){
-        return 'Supabase blocked this save because the selected parent plan is not valid for your current team chain or schema. The plan saves under the currently signed-in email, not the typed full name. Sign in as the actual member account, rerun supabase-schema.sql, then supabase-fix-member-parent.sql, sign in again, and reselect the parent plan.';
+        return 'Supabase blocked this save because the selected parent plan is not valid under the current schema. The plan saves under the currently signed-in email, not the typed full name. Sign in as the actual member account, rerun supabase-schema.sql, make sure the parent account has already saved a leader plan, then sign in again and reselect the parent plan.';
       }
       if(curType==='leader'||curType==='squad'||curType==='platoon'){
-        return 'Supabase blocked this save because the selected parent plan is not valid for your current team chain or schema. The plan saves under the currently signed-in email, not the typed full name. Sign in as the actual '+TYPE_LABEL[curType]+' account, rerun supabase-schema.sql, then supabase-hierarchy-link-directory.sql and supabase-fix-full-hierarchy-chain.sql, sign in again, and reselect the parent plan.';
+        return 'Supabase blocked this save because the selected parent plan is not valid under the current schema. The plan saves under the currently signed-in email, not the typed full name. Sign in as the actual '+TYPE_LABEL[curType]+' account, rerun supabase-schema.sql and supabase-hierarchy-link-directory.sql, make sure the parent account has already saved its plan, then sign in again and reselect the parent plan.';
       }
     }
     return 'Supabase blocked this save under the current Row Level Security rules. The plan saves under the currently signed-in email, not the typed full name. Confirm you are signed in to the correct account and reran the latest supabase-schema.sql.';
@@ -953,7 +953,12 @@ async function handleSignUp(){
   try{
     var email=document.getElementById('auth-email').value.trim();
     var password=document.getElementById('auth-password').value;
-    await window.GutguardSupabase.signUpWithPassword(email,password);
+    var displayName=document.getElementById('auth-display-name').value.trim();
+    var roleType=document.getElementById('auth-role-type').value;
+    await window.GutguardSupabase.signUpWithPassword(email,password,{
+      display_name: displayName,
+      role_type: roleType
+    });
     currentUser=await window.GutguardSupabase.getUser();
     resetSavedPlansCache();
     renderAuthState();
@@ -1004,7 +1009,7 @@ async function populateParentOptions(type, selectedPlanId){
       setSelectMessage(selectEl,'No '+(TYPE_LABEL[PARENT_ROLE[type]]||PARENT_ROLE[type])+' plans found');
       selectEl.disabled=true;
       selectEl.dataset.parentState='no-parents';
-      if(errorEl) errorEl.textContent='No parent plans are available yet. Make sure the parent user is assigned to the correct team chain and has already saved a parent plan.';
+      if(errorEl) errorEl.textContent='No parent plans are available yet. Make sure a signed-up parent account has already saved a parent plan for that role.';
       return;
     }
     setSelectMessage(selectEl,'Select a parent plan');
@@ -1020,7 +1025,7 @@ async function populateParentOptions(type, selectedPlanId){
     if(currentValue&&!currentMatched){
       selectEl.value='';
       setFormDirty(true,true);
-      if(errorEl) errorEl.textContent='Your previously selected parent plan is no longer valid for your current team chain. Choose a valid parent plan again.';
+      if(errorEl) errorEl.textContent='Your previously selected parent plan is no longer valid. Choose a valid parent plan again.';
     }
     if(!currentValue&&parents.length===1){
       selectEl.value=parents[0].id;
@@ -1044,7 +1049,7 @@ async function ensureValidParentSelectionBeforeSave(type, mode){
   await populateParentOptions(type);
   if(hasValidParentSelection(type)) return;
   if(mode==='draft'&&!initialState.value) return;
-  throw new Error('Select a valid parent '+TYPE_LABEL[PARENT_ROLE[type]]+' plan before saving. If the dropdown is empty, fix the team chain in Supabase and create the parent plan first.');
+  throw new Error('Select a valid parent '+TYPE_LABEL[PARENT_ROLE[type]]+' plan before saving. If the dropdown is empty, make sure a signed-up parent account has already created that parent plan.');
 }
 async function refreshChildPlans(type){
   childPlans[type]=[];

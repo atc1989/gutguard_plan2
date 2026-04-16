@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { legacyHtmlPath } from "./gutguard-data";
+import { legacyHtmlPath, legacyClientScriptNames, legacyScriptPaths } from "./gutguard-data";
 
 const legacyHtml = fs.readFileSync(legacyHtmlPath, "utf8");
 
@@ -32,4 +32,11 @@ export function getLegacyFooterMarkup() {
     /(<footer class="site-footer">[\s\S]*?<div class="toast" id="toast" role="status" aria-live="polite"><\/div>)/i,
     "footer"
   );
+}
+
+export function getLegacyClientScripts() {
+  return legacyClientScriptNames.map((scriptName) => ({
+    name: scriptName,
+    content: fs.readFileSync(legacyScriptPaths[scriptName], "utf8")
+  }));
 }

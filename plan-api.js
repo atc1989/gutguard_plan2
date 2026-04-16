@@ -48,6 +48,46 @@
     };
   }
 
+  function normalizeProfileRow(row) {
+    if (!row) {
+      return null;
+    }
+
+    return {
+      user_id: row.user_id,
+      email: row.email || "",
+      display_name: row.display_name || "",
+      role_type: row.role_type || "member",
+      is_admin: row.is_admin === true,
+      is_active: row.is_active !== false,
+      approval_status: row.approval_status || "approved",
+      notes: row.notes || "",
+      approved_at: row.approved_at || null,
+      created_at: row.created_at || null,
+      updated_at: row.updated_at || null,
+      latest_plan_id: row.latest_plan_id || null,
+      latest_plan_status: row.latest_plan_status || null,
+      latest_plan_updated_at: row.latest_plan_updated_at || null
+    };
+  }
+
+  function normalizeDirectoryRow(row) {
+    if (!row) {
+      return null;
+    }
+
+    return {
+      user_id: row.user_id,
+      email: row.email || "",
+      display_name: row.display_name || "",
+      role_type: row.role_type || "member",
+      latest_plan_id: row.latest_plan_id || null,
+      latest_plan_status: row.latest_plan_status || null,
+      latest_plan_updated_at: row.latest_plan_updated_at || null,
+      can_link_as_parent: row.can_link_as_parent === true
+    };
+  }
+
   function summarizeChildPlan(plan, weekRows) {
     var totals = { leads: 0, attendees: 0, pay_ins: 0, sales: 0 };
     (weekRows || []).forEach(function (row) {
@@ -137,6 +177,40 @@
     return (result.data || []).map(normalizePlanRow);
   }
 
+  async function getMyProfile() {
+    var client = getClientOrThrow();
+    var user = await getUserOrThrow();
+
+    var result = await client
+      .from("user_profiles")
+      .select("user_id, email, display_name, role_type, is_admin, is_active, approval_status, notes, approved_at, created_at, updated_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (result.error) {
+      throw new Error(result.error.message);
+    }
+
+    return normalizeProfileRow(result.data);
+  }
+
+  async function syncMyProfile(profile) {
+    var client = getClientOrThrow();
+    await getUserOrThrow();
+
+    var result = await client
+      .rpc("sync_my_profile", {
+        profile_payload: profile || {}
+      })
+      .single();
+
+    if (result.error) {
+      throw new Error(result.error.message);
+    }
+
+    return normalizeProfileRow(result.data);
+  }
+
   async function listPotentialParents(roleType) {
     var parentRoleMap = {
       member: "leader",
@@ -220,6 +294,89 @@
     return childPlans.map(function (plan) {
       return summarizeChildPlan(plan, weeksByPlan[plan.id] || []);
     });
+  }
+
+  async function getDashboardSummary() {
+    var client = getClientOrThrow();
+    await getUserOrThrow();
+
+    var result = await client.rpc("get_planner_dashboard");
+    if (result.error) {
+      throw new Error(result.error.message);
+    }
+
+    return result.data || {};
+  }
+
+  async function listPlanActivity(limitCount) {
+    var client = getClientOrThrow();
+    await getUserOrThrow();
+
+    var result = await client.rpc("list_plan_activity", {
+      limit_count: limitCount || 12
+    });
+
+    if (result.error) {
+      throw new Error(result.error.message);
+    }
+
+    return (result.data || []).map(function (row) {
+      return {
+        id: row.id,
+        created_at: row.created_at,
+        action: row.action,
+        plan_id: row.plan_id,
+        plan_role_type: row.plan_role_type,
+        plan_full_name: row.plan_full_name,
+        status_before: row.status_before,
+        status_after: row.status_after,
+        actor_name: row.actor_name,
+        actor_email: row.actor_email,
+        detail: row.detail
+      };
+    });
+  }
+
+  async function listUserProfiles() {
+    var client = getClientOrThrow();
+    await getUserOrThrow();
+
+    var result = await client.rpc("list_user_profiles");
+    if (result.error) {
+      throw new Error(result.error.message);
+    }
+
+    return (result.data || []).map(normalizeProfileRow);
+  }
+
+  async function listDirectoryProfiles() {
+    var client = getClientOrThrow();
+    await getUserOrThrow();
+
+    var result = await client.rpc("list_directory_profiles");
+    if (result.error) {
+      throw new Error(result.error.message);
+    }
+
+    return (result.data || []).map(normalizeDirectoryRow);
+  }
+
+  async function adminUpdateUserProfile(userId, profile) {
+    var client = getClientOrThrow();
+    await getUserOrThrow();
+
+    var result = await client
+      .rpc("admin_update_user_profile", {
+        target_user_id: userId,
+        profile_payload: profile || {}
+      })
+      .single();
+
+    if (result.error) {
+      throw new Error(result.error.message);
+    }
+
+    return normalizeProfileRow(result.data);
   }
 
   async function savePlanToSupabase(plan) {
@@ -370,8 +527,15 @@
     },
     listPlans: listPlans,
     listReviewQueue: listReviewQueue,
+    getMyProfile: getMyProfile,
+    syncMyProfile: syncMyProfile,
     listPotentialParents: listPotentialParents,
     listChildPlans: listChildPlans,
+    getDashboardSummary: getDashboardSummary,
+    listPlanActivity: listPlanActivity,
+    listUserProfiles: listUserProfiles,
+    listDirectoryProfiles: listDirectoryProfiles,
+    adminUpdateUserProfile: adminUpdateUserProfile,
     savePlanToSupabase: savePlanToSupabase,
     loadPlanFromSupabase: loadPlanFromSupabase,
     deletePlanFromSupabase: deletePlanFromSupabase,

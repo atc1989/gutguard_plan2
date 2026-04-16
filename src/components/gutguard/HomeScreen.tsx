@@ -1,6 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
+import { useState } from "react";
 
 type RoleType = "member" | "leader" | "squad" | "platoon" | "o1";
 
@@ -29,8 +30,15 @@ declare global {
     handleAuthSubmit?: (event?: Event) => void;
     handleSignUp?: () => void;
     handleSignOut?: () => void;
+    saveMyProfile?: () => void;
     refreshSavedPlans?: (forceRefresh?: boolean) => void;
     refreshReviewQueue?: (forceRefresh?: boolean) => void;
+    refreshDashboard?: (forceRefresh?: boolean) => void;
+    refreshActivityFeed?: (forceRefresh?: boolean) => void;
+    refreshAdminDirectory?: (forceRefresh?: boolean) => void;
+    refreshUserDirectory?: (forceRefresh?: boolean) => void;
+    bulkApprovePendingProfiles?: () => void;
+    bulkRejectPendingProfiles?: () => void;
   }
 }
 
@@ -179,6 +187,10 @@ const roleCards: RoleCard[] = [
 ];
 
 export default function HomeScreen() {
+  const [activePanel, setActivePanel] = useState<"overview" | "workspace" | "operations">(
+    "overview"
+  );
+
   function handleStartForm(role: RoleType) {
     window.startForm?.(role);
   }
@@ -189,6 +201,10 @@ export default function HomeScreen() {
 
   function refreshSavedPlans(forceRefresh?: boolean) {
     window.refreshSavedPlans?.(forceRefresh);
+  }
+
+  function getPanelClass(panel: "overview" | "workspace" | "operations") {
+    return `home-panel ${activePanel === panel ? "active" : ""}`;
   }
 
   return (
@@ -210,6 +226,10 @@ export default function HomeScreen() {
             <div className="auth-copy">
               Sign in with your Supabase account to save drafts, reopen submitted plans, and
               keep consolidation records scoped to the correct user through Supabase RLS.
+            </div>
+            <div className="auth-copy" style={{ marginTop: ".35rem" }}>
+              New accounts must verify email first, then wait for admin approval before they can
+              load parent links, save plans, or review submissions.
             </div>
           </div>
         </div>
@@ -235,12 +255,29 @@ export default function HomeScreen() {
               aria-label="Password"
               autoComplete="current-password"
             />
+            <input
+              type="text"
+              id="auth-display-name"
+              placeholder="Display name for sign up"
+              aria-label="Display name for sign up"
+              autoComplete="name"
+            />
+            <select id="auth-role-type" aria-label="Role for sign up" defaultValue="member">
+              <option value="member">Member</option>
+              <option value="leader">Team Leader</option>
+              <option value="squad">Squad Leader</option>
+              <option value="platoon">Platoon Leader</option>
+              <option value="o1">01 / Product Center</option>
+            </select>
             <button className="btn btp" type="submit">
               Sign In
             </button>
             <button className="btn bto" type="button" onClick={() => window.handleSignUp?.()}>
               Sign Up
             </button>
+            <div className="saved-plan-stat-meta" style={{ flexBasis: "100%" }}>
+              Display name and role are used only when creating a new account.
+            </div>
           </form>
           <div
             id="auth-signed-in"
@@ -248,6 +285,10 @@ export default function HomeScreen() {
           >
             <span>
               Signed in as <strong id="auth-email-display"></strong>
+            </span>
+            <span className="auth-status">
+              <strong id="auth-display-name-display"></strong>
+              <span id="auth-role-display" style={{ marginLeft: 8 }}></span>
             </span>
             <button
               className="btn bto"
@@ -259,179 +300,473 @@ export default function HomeScreen() {
             </button>
           </div>
         </div>
+        <div id="auth-access-state" className="saved-plan-empty" style={{ marginTop: ".85rem" }}>
+          Sign in to load your access state.
+        </div>
       </div>
 
-      <div className="memo-box">
-        <div className="mb-lbl">How It Works</div>
-        <strong>1.</strong> Every role starts with a 90-day target, and the system converts it
-        into leads, attendees, pay-ins, sales, and weekly execution.
-        <br />
-        <strong>2.</strong> Leaders get a <strong>Consolidation View</strong> that combines child
-        plans, manual fallback entries, and saved linked plans in one roll-up.
-        <br />
-        <strong>3.</strong> The 01/Product Center closes the loop with one final view of targets,
-        event commitments, and actual combined field activity.
-      </div>
-
-      <div className="sec-lbl">System Features</div>
-      <div className="feature-grid">
-        {featureCards.map((card) => (
-          <div key={card.title} className="feature-card">
-            <div className="feature-eyebrow">{card.eyebrow}</div>
-            <div className="feature-title">{card.title}</div>
-            <div className="feature-copy">{card.copy}</div>
-            <div className="feature-meta">{card.meta}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="sec-lbl">Consolidation Chain</div>
-      <div className="flow-chain">
-        {chainRoles.map((item, index) => (
-          <span key={item.role} style={{ display: "contents" }}>
-            <div className="fc-node">
-              <span
-                className={`fc-badge ${item.className}`}
-                onClick={() => handleStartForm(item.role)}
-              >
-                {item.icon} {item.label}
-              </span>
-            </div>
-            {index < chainRoles.length - 1 ? <span className="fc-arrow">-&gt;</span> : null}
-          </span>
-        ))}
-      </div>
-
-      <div className="step-bar">
-        {stepItems.map((step) => (
-          <div key={step.number} className="step-item">
-            <span className="s-num">{step.number}</span>
-            <div className="s-name">{step.name}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="sec-lbl">Open a Plan</div>
-      <div className="type-grid">
-        {roleCards.map((card) => (
-          <div
-            key={card.role}
-            className={`tc ${card.tileClass}`}
-            onClick={() => handleStartForm(card.role)}
-          >
-            <span className="t-icon">{card.icon}</span>
-            <div className="t-name">{card.name}</div>
-            <div className="t-desc">{card.description}</div>
-            <ul className="t-list">
-              {card.items.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-            <div className="t-foot">
-              <span className={`t-badge ${card.badgeClass}`}>{card.badgeLabel}</span>
-              <span className="t-cta">{card.cta}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="saved-plans-wrap">
+      <div id="dashboard-wrap" className="saved-plans-wrap" style={{ display: "none" }}>
         <div className="saved-plans-head">
           <div>
             <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
-              Saved Plans
+              Operations Dashboard
             </div>
             <div className="saved-plans-copy">
-              Browse plans already stored in Supabase and open any role-specific record directly
-              from the home screen.
+              Live operating view of accounts, plan activity, missing hierarchy links, and review
+              workload.
             </div>
           </div>
           <div className="saved-plans-tools">
-            <input
-              type="text"
-              id="saved-plans-search"
-              placeholder="Search name, ID, or status"
-              aria-label="Search saved plans by name, ID, or status"
-              onInput={() => refreshSavedPlans()}
-            />
-            <select
-              id="saved-plans-filter"
-              aria-label="Filter saved plans by role"
-              onChange={() => refreshSavedPlans()}
-            >
-              <option value="">All Roles</option>
-              <option value="member">Member</option>
-              <option value="leader">Team Leader</option>
-              <option value="squad">Squad Leader</option>
-              <option value="platoon">Platoon Leader</option>
-              <option value="o1">01 / Product Center</option>
-            </select>
-            <select
-              id="saved-plans-status"
-              aria-label="Filter saved plans by status"
-              onChange={() => refreshSavedPlans()}
-            >
-              <option value="">All Statuses</option>
-              <option value="submitted">Submitted</option>
-              <option value="draft">Draft</option>
-              <option value="approved">Approved</option>
-              <option value="needs_revision">Needs Revision</option>
-            </select>
-            <button className="btn bto" type="button" onClick={() => refreshSavedPlans(true)}>
-              Refresh List
+            <button className="btn bto" type="button" onClick={() => window.refreshDashboard?.(true)}>
+              Refresh Dashboard
             </button>
           </div>
         </div>
-        <div id="saved-plan-stats" className="saved-plan-stats">
+        <div id="dashboard-stats" className="saved-plan-stats">
           <div className="saved-plan-stat-card">
-            <div className="saved-plan-stat-label">Total Plans</div>
+            <div className="saved-plan-stat-label">Accounts</div>
             <div className="saved-plan-stat-value">0</div>
             <div className="saved-plan-stat-meta">Visible after sign-in</div>
           </div>
           <div className="saved-plan-stat-card">
-            <div className="saved-plan-stat-label">Submitted</div>
+            <div className="saved-plan-stat-label">Plans</div>
             <div className="saved-plan-stat-value">0</div>
-            <div className="saved-plan-stat-meta">Ready records</div>
+            <div className="saved-plan-stat-meta">All roles combined</div>
           </div>
           <div className="saved-plan-stat-card">
-            <div className="saved-plan-stat-label">Drafts</div>
+            <div className="saved-plan-stat-label">Missing Links</div>
             <div className="saved-plan-stat-value">0</div>
-            <div className="saved-plan-stat-meta">Unfinished plans</div>
+            <div className="saved-plan-stat-meta">Plans without a parent</div>
           </div>
           <div className="saved-plan-stat-card">
-            <div className="saved-plan-stat-label">Last Updated</div>
-            <div className="saved-plan-stat-value">-</div>
-            <div className="saved-plan-stat-meta">Most recent activity</div>
-          </div>
-        </div>
-        <div id="saved-plans-list" className="saved-plans-list">
-          <div className="saved-plan-empty">
-            Saved plans will appear here after Supabase is connected.
+            <div className="saved-plan-stat-label">Pending Review</div>
+            <div className="saved-plan-stat-value">0</div>
+            <div className="saved-plan-stat-meta">Submitted child plans</div>
           </div>
         </div>
       </div>
-      <div className="saved-plans-wrap">
+
+      <div id="my-profile-wrap" className="saved-plans-wrap" style={{ display: "none" }}>
         <div className="saved-plans-head">
           <div>
             <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
-              Review Queue
+              My Profile
             </div>
             <div className="saved-plans-copy">
-              Submitted child plans that are visible through the hierarchy chain can be approved
-              or sent back with revision notes from here.
+              Manage the display name shown around the planner. Role, approval, and admin access
+              are controlled by the admin directory.
             </div>
           </div>
           <div className="saved-plans-tools">
-            <button className="btn bto" type="button" onClick={() => window.refreshReviewQueue?.(true)}>
-              Refresh Queue
+            <button className="btn btp" type="button" onClick={() => window.saveMyProfile?.()}>
+              Save Profile
             </button>
           </div>
         </div>
-        <div id="review-queue-list" className="saved-plans-list">
-          <div className="saved-plan-empty">
-            Reviewable plans will appear here after sign-in.
+        <div className="profile-grid">
+          <div className="profile-field">
+            <label htmlFor="profile-display-name">Display Name</label>
+            <input id="profile-display-name" type="text" placeholder="Your display name" />
+          </div>
+          <div className="profile-field">
+            <label htmlFor="profile-role-type">Current Role</label>
+            <input id="profile-role-type" type="text" readOnly placeholder="Assigned by admin" />
+          </div>
+          <div className="profile-field profile-field-wide">
+            <label htmlFor="profile-notes">Notes</label>
+            <textarea
+              id="profile-notes"
+              rows={3}
+              placeholder="Optional note for this account"
+            ></textarea>
           </div>
         </div>
       </div>
+
+      <div className="home-switcher" role="tablist" aria-label="Home sections">
+        <button
+          type="button"
+          className={`home-switcher-btn ${activePanel === "overview" ? "active" : ""}`}
+          onClick={() => setActivePanel("overview")}
+        >
+          Overview
+        </button>
+        <button
+          type="button"
+          className={`home-switcher-btn ${activePanel === "workspace" ? "active" : ""}`}
+          onClick={() => setActivePanel("workspace")}
+        >
+          Workspace
+        </button>
+        <button
+          type="button"
+          className={`home-switcher-btn ${activePanel === "operations" ? "active" : ""}`}
+          onClick={() => setActivePanel("operations")}
+        >
+          Operations
+        </button>
+      </div>
+
+      <div className={getPanelClass("overview")} aria-hidden={activePanel !== "overview"}>
+        <div className="memo-box">
+          <div className="mb-lbl">How It Works</div>
+          <strong>1.</strong> Every role starts with a 90-day target, and the system converts it
+          into leads, attendees, pay-ins, sales, and weekly execution.
+          <br />
+          <strong>2.</strong> Leaders get a <strong>Consolidation View</strong> that combines child
+          plans, manual fallback entries, and saved linked plans in one roll-up.
+          <br />
+          <strong>3.</strong> The 01/Product Center closes the loop with one final view of targets,
+          event commitments, and actual combined field activity.
+        </div>
+
+        <div className="sec-lbl">System Features</div>
+        <div className="feature-grid">
+          {featureCards.map((card) => (
+            <div key={card.title} className="feature-card">
+              <div className="feature-eyebrow">{card.eyebrow}</div>
+              <div className="feature-title">{card.title}</div>
+              <div className="feature-copy">{card.copy}</div>
+              <div className="feature-meta">{card.meta}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="sec-lbl">Consolidation Chain</div>
+        <div className="flow-chain">
+          {chainRoles.map((item, index) => (
+            <span key={item.role} style={{ display: "contents" }}>
+              <div className="fc-node">
+                <span
+                  className={`fc-badge ${item.className}`}
+                  onClick={() => handleStartForm(item.role)}
+                >
+                  {item.icon} {item.label}
+                </span>
+              </div>
+              {index < chainRoles.length - 1 ? <span className="fc-arrow">-&gt;</span> : null}
+            </span>
+          ))}
+        </div>
+
+        <div className="step-bar">
+          {stepItems.map((step) => (
+            <div key={step.number} className="step-item">
+              <span className="s-num">{step.number}</span>
+              <div className="s-name">{step.name}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="sec-lbl">Open a Plan</div>
+        <div className="type-grid">
+          {roleCards.map((card) => (
+            <div
+              key={card.role}
+              className={`tc ${card.tileClass}`}
+              onClick={() => handleStartForm(card.role)}
+            >
+              <span className="t-icon">{card.icon}</span>
+              <div className="t-name">{card.name}</div>
+              <div className="t-desc">{card.description}</div>
+              <ul className="t-list">
+                {card.items.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+              <div className="t-foot">
+                <span className={`t-badge ${card.badgeClass}`}>{card.badgeLabel}</span>
+                <span className="t-cta">{card.cta}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className={getPanelClass("workspace")} aria-hidden={activePanel !== "workspace"}>
+        <div className="saved-plans-wrap">
+          <div className="saved-plans-head">
+            <div>
+              <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
+                Saved Plans
+              </div>
+              <div className="saved-plans-copy">
+                Browse plans already stored in Supabase and open any role-specific record directly
+                from the home screen.
+              </div>
+            </div>
+            <div className="saved-plans-tools">
+              <input
+                type="text"
+                id="saved-plans-search"
+                placeholder="Search name, ID, or status"
+                aria-label="Search saved plans by name, ID, or status"
+                onInput={() => refreshSavedPlans()}
+              />
+              <select
+                id="saved-plans-filter"
+                aria-label="Filter saved plans by role"
+                onChange={() => refreshSavedPlans()}
+              >
+                <option value="">All Roles</option>
+                <option value="member">Member</option>
+                <option value="leader">Team Leader</option>
+                <option value="squad">Squad Leader</option>
+                <option value="platoon">Platoon Leader</option>
+                <option value="o1">01 / Product Center</option>
+              </select>
+              <select
+                id="saved-plans-status"
+                aria-label="Filter saved plans by status"
+                onChange={() => refreshSavedPlans()}
+              >
+                <option value="">All Statuses</option>
+                <option value="submitted">Submitted</option>
+                <option value="draft">Draft</option>
+                <option value="approved">Approved</option>
+                <option value="needs_revision">Needs Revision</option>
+              </select>
+              <button className="btn bto" type="button" onClick={() => refreshSavedPlans(true)}>
+                Refresh List
+              </button>
+            </div>
+          </div>
+          <div id="saved-plan-stats" className="saved-plan-stats">
+            <div className="saved-plan-stat-card">
+              <div className="saved-plan-stat-label">Total Plans</div>
+              <div className="saved-plan-stat-value">0</div>
+              <div className="saved-plan-stat-meta">Visible after sign-in</div>
+            </div>
+            <div className="saved-plan-stat-card">
+              <div className="saved-plan-stat-label">Submitted</div>
+              <div className="saved-plan-stat-value">0</div>
+              <div className="saved-plan-stat-meta">Ready records</div>
+            </div>
+            <div className="saved-plan-stat-card">
+              <div className="saved-plan-stat-label">Drafts</div>
+              <div className="saved-plan-stat-value">0</div>
+              <div className="saved-plan-stat-meta">Unfinished plans</div>
+            </div>
+            <div className="saved-plan-stat-card">
+              <div className="saved-plan-stat-label">Last Updated</div>
+              <div className="saved-plan-stat-value">-</div>
+              <div className="saved-plan-stat-meta">Most recent activity</div>
+            </div>
+          </div>
+          <div id="saved-plans-list" className="saved-plans-list">
+            <div className="saved-plan-empty">
+              Saved plans will appear here after Supabase is connected.
+            </div>
+          </div>
+        </div>
+        <div className="saved-plans-wrap">
+          <div className="saved-plans-head">
+            <div>
+              <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
+                Review Queue
+              </div>
+              <div className="saved-plans-copy">
+                Submitted child plans that are visible through the hierarchy chain can be approved
+                or sent back with revision notes from here.
+              </div>
+            </div>
+            <div className="saved-plans-tools">
+              <button className="btn bto" type="button" onClick={() => window.refreshReviewQueue?.(true)}>
+                Refresh Queue
+              </button>
+            </div>
+          </div>
+          <div id="review-queue-list" className="saved-plans-list">
+            <div className="saved-plan-empty">
+              Reviewable plans will appear here after sign-in.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className={getPanelClass("operations")} aria-hidden={activePanel !== "operations"}>
+        <div className="saved-plans-wrap">
+          <div className="saved-plans-head">
+            <div>
+              <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
+                User Directory
+              </div>
+              <div className="saved-plans-copy">
+                Browse active approved accounts by role, see whether they already have a plan, and
+                confirm who is ready for hierarchy linking.
+              </div>
+            </div>
+            <div className="saved-plans-tools">
+              <input
+                type="text"
+                id="user-directory-search"
+                placeholder="Search user or email"
+                aria-label="Search approved users"
+                onInput={() => window.refreshUserDirectory?.()}
+              />
+              <select
+                id="user-directory-role"
+                aria-label="Filter approved users by role"
+                onChange={() => window.refreshUserDirectory?.()}
+              >
+                <option value="">All Roles</option>
+                <option value="member">Member</option>
+                <option value="leader">Team Leader</option>
+                <option value="squad">Squad Leader</option>
+                <option value="platoon">Platoon Leader</option>
+                <option value="o1">01 / Product Center</option>
+              </select>
+              <button className="btn bto" type="button" onClick={() => window.refreshUserDirectory?.(true)}>
+                Refresh Directory
+              </button>
+            </div>
+          </div>
+          <div id="user-directory-list" className="saved-plans-list">
+            <div className="saved-plan-empty">
+              Approved users will appear here after sign-in.
+            </div>
+          </div>
+        </div>
+
+        <div className="saved-plans-wrap">
+          <div className="saved-plans-head">
+            <div>
+              <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
+                Recent Activity
+              </div>
+              <div className="saved-plans-copy">
+                Audit trail for account onboarding, plan updates, approvals, and deletion events.
+              </div>
+            </div>
+            <div className="saved-plans-tools">
+              <input
+                type="text"
+                id="activity-feed-search"
+                placeholder="Search activity"
+                aria-label="Search recent activity"
+                onInput={() => window.refreshActivityFeed?.()}
+              />
+              <select
+                id="activity-feed-action"
+                aria-label="Filter recent activity by action"
+                onChange={() => window.refreshActivityFeed?.()}
+              >
+                <option value="">All Actions</option>
+                <option value="created">Plan Created</option>
+                <option value="updated">Plan Updated</option>
+                <option value="status_changed">Plan Status Changed</option>
+                <option value="deleted">Plan Deleted</option>
+                <option value="account_created">Account Created</option>
+                <option value="profile_updated">Profile Updated</option>
+                <option value="approval_changed">Approval Changed</option>
+                <option value="role_changed">Role Changed</option>
+                <option value="activation_changed">Activation Changed</option>
+                <option value="admin_changed">Admin Changed</option>
+              </select>
+              <select
+                id="activity-feed-role"
+                aria-label="Filter recent activity by role"
+                onChange={() => window.refreshActivityFeed?.()}
+              >
+                <option value="">All Roles</option>
+                <option value="member">Member</option>
+                <option value="leader">Team Leader</option>
+                <option value="squad">Squad Leader</option>
+                <option value="platoon">Platoon Leader</option>
+                <option value="o1">01 / Product Center</option>
+              </select>
+              <button className="btn bto" type="button" onClick={() => window.refreshActivityFeed?.(true)}>
+                Refresh Activity
+              </button>
+            </div>
+          </div>
+          <div id="activity-feed-list" className="saved-plans-list">
+            <div className="saved-plan-empty">
+              Recent activity will appear here after sign-in.
+            </div>
+          </div>
+        </div>
+
+        <div id="admin-directory-wrap" className="saved-plans-wrap" style={{ display: "none" }}>
+          <div className="saved-plans-head">
+            <div>
+              <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
+                Admin Directory
+              </div>
+              <div className="saved-plans-copy">
+                Manage account names, roles, active status, and onboarding notes for the whole
+                hierarchy directory.
+              </div>
+            </div>
+            <div className="saved-plans-tools">
+              <input
+                type="text"
+                id="admin-profiles-search"
+                placeholder="Search email or name"
+                aria-label="Search user profiles by email or name"
+                onInput={() => window.refreshAdminDirectory?.()}
+              />
+              <select
+                id="admin-profiles-role"
+                aria-label="Filter admin directory by role"
+                onChange={() => window.refreshAdminDirectory?.()}
+              >
+                <option value="">All Roles</option>
+                <option value="member">Member</option>
+                <option value="leader">Team Leader</option>
+                <option value="squad">Squad Leader</option>
+                <option value="platoon">Platoon Leader</option>
+                <option value="o1">01 / Product Center</option>
+              </select>
+              <select
+                id="admin-profiles-approval"
+                aria-label="Filter admin directory by approval"
+                onChange={() => window.refreshAdminDirectory?.()}
+              >
+                <option value="">All Approval States</option>
+                <option value="pending">Pending</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+              </select>
+              <select
+                id="admin-profiles-admin"
+                aria-label="Filter admin directory by admin access"
+                onChange={() => window.refreshAdminDirectory?.()}
+              >
+                <option value="">All Access</option>
+                <option value="admin">Admin</option>
+                <option value="standard">Standard</option>
+              </select>
+              <select
+                id="admin-profiles-sort"
+                aria-label="Sort admin directory"
+                onChange={() => window.refreshAdminDirectory?.()}
+                defaultValue="name"
+              >
+                <option value="name">Sort by Name</option>
+                <option value="newest">Newest Signup</option>
+                <option value="latest-plan">Latest Plan Activity</option>
+                <option value="pending-first">Pending First</option>
+              </select>
+              <button className="btn bto" type="button" onClick={() => window.bulkApprovePendingProfiles?.()}>
+                Approve Visible Pending
+              </button>
+              <button className="btn btn-danger-lite" type="button" onClick={() => window.bulkRejectPendingProfiles?.()}>
+                Reject Visible Pending
+              </button>
+              <button className="btn bto" type="button" onClick={() => window.refreshAdminDirectory?.(true)}>
+                Refresh Directory
+              </button>
+            </div>
+          </div>
+          <div id="admin-profiles-list" className="saved-plans-list">
+            <div className="saved-plan-empty">
+              Admin controls become available after an approved admin signs in.
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="notice n-danger">
         <strong>Non-Negotiable:</strong> All leaders submit individual plans | All plans include
         leads, pay-ins, sales | Each Product Center schedules at least 2 big events | Final plan

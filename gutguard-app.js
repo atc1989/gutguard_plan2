@@ -1,9 +1,15 @@
 /* STATE */
 var curType = null, curWeek = 1;
 var currentUser = null;
+var currentUserProfile = null;
 var childPlans = {member:[],leader:[],squad:[],platoon:[],o1:[]};
 var savedPlansCache = {scopeId:null, plans:null};
 var reviewQueueCache = {scopeId:null, plans:null};
+var dashboardCache = {userId:null, data:null};
+var activityFeedCache = {userId:null, items:null};
+var adminProfilesCache = {userId:null, profiles:null};
+var userDirectoryCache = {userId:null, profiles:null};
+var visibleAdminProfiles = [];
 var PARENT_ROLE = {member:'leader',leader:'squad',squad:'platoon',platoon:'o1',o1:null};
 function makePlanMeta(){return {planId:null,status:'submitted',lastSavedAt:null};}
 var planMeta = {
@@ -134,6 +140,89 @@ function formatSavedAt(value){
   if(isNaN(d.getTime()))return '';
   return d.toLocaleString();
 }
+function getRoleLabel(roleType){
+  return TYPE_LABEL[roleType]||roleType||'';
+}
+function getCurrentUserRoleType(){
+  return currentUserProfile&&currentUserProfile.role_type?currentUserProfile.role_type:'';
+}
+function getCurrentUserDisplayName(){
+  return currentUserProfile&&currentUserProfile.display_name?currentUserProfile.display_name:'';
+}
+function isCurrentUserVerified(){
+  return !!(currentUser&&currentUser.email_confirmed_at);
+}
+function isCurrentUserActive(){
+  return !!(!currentUserProfile||currentUserProfile.is_active!==false);
+}
+function getCurrentUserApprovalStatus(){
+  return currentUserProfile&&currentUserProfile.approval_status?currentUserProfile.approval_status:'';
+}
+function hasCurrentUserFullAccess(){
+  return !!(currentUser&&currentUserProfile&&isCurrentUserVerified()&&isCurrentUserActive()&&getCurrentUserApprovalStatus()==='approved');
+}
+function isCurrentUserAdmin(){
+  return !!(hasCurrentUserFullAccess()&&currentUserProfile&&currentUserProfile.is_admin===true);
+}
+function getCurrentUserAccessMessage(actionLabel){
+  var actionText=actionLabel||'use the planner';
+  if(!currentUser){
+    return 'Sign in to '+actionText+'.';
+  }
+  if(!currentUserProfile){
+    return 'Your account profile is still syncing. Refresh in a moment.';
+  }
+  if(!isCurrentUserVerified()){
+    return 'Verify your email before you can '+actionText+'.';
+  }
+  if(currentUserProfile.is_active===false){
+    return 'This account is inactive. Ask an admin to reactivate it.';
+  }
+  if(getCurrentUserApprovalStatus()==='pending'){
+    return 'Your account is waiting for admin approval before you can '+actionText+'.';
+  }
+  if(getCurrentUserApprovalStatus()==='rejected'){
+    return 'Your account has been rejected. Ask an admin to review your access.';
+  }
+  return '';
+}
+function getDiagnosticStore(){
+  if(!window.__gutguardDiagnostics){
+    window.__gutguardDiagnostics=[];
+  }
+  return window.__gutguardDiagnostics;
+}
+function reportClientIssue(context, error, extras){
+  var entry={
+    context:context||'unknown',
+    message:error&&error.message?String(error.message):String(error||'Unknown error'),
+    created_at:new Date().toISOString(),
+    extras:extras||null
+  };
+  getDiagnosticStore().push(entry);
+  if(window.console&&window.console.error){
+    window.console.error('[Gutguard]', context, error, extras||'');
+  }
+  return entry;
+}
+function getActivityActionLabel(action){
+  var labelMap={
+    created:'Plan Created',
+    updated:'Plan Updated',
+    status_changed:'Plan Status Changed',
+    deleted:'Plan Deleted',
+    account_created:'Account Created',
+    profile_updated:'Profile Updated',
+    approval_changed:'Approval Changed',
+    role_changed:'Role Changed',
+    activation_changed:'Activation Changed',
+    admin_changed:'Admin Access Changed'
+  };
+  return labelMap[action]||String(action||'updated').replace(/_/g,' ');
+}
+function getTimeValue(value){
+  return Date.parse(value||0)||0;
+}
 function clearNode(el){
   while(el&&el.firstChild)el.removeChild(el.firstChild);
 }
@@ -205,10 +294,10 @@ function getFriendlySaveError(err){
   if(/row-level security policy.*plans/i.test(raw)){
     if(curType&&PARENT_ROLE[curType]){
       if(curType==='member'){
-        return 'Supabase blocked this save because the selected parent plan is not valid for your current team chain or schema. The plan saves under the currently signed-in email, not the typed full name. Sign in as the actual member account, rerun supabase-schema.sql, then supabase-fix-member-parent.sql, sign in again, and reselect the parent plan.';
+        return 'Supabase blocked this save because the selected parent plan is not valid under the current schema. The plan saves under the currently signed-in email, not the typed full name. Sign in as the actual member account, rerun supabase-schema.sql, make sure the parent account has already saved a leader plan, then sign in again and reselect the parent plan.';
       }
       if(curType==='leader'||curType==='squad'||curType==='platoon'){
-        return 'Supabase blocked this save because the selected parent plan is not valid for your current team chain or schema. The plan saves under the currently signed-in email, not the typed full name. Sign in as the actual '+TYPE_LABEL[curType]+' account, rerun supabase-schema.sql, then supabase-hierarchy-link-directory.sql and supabase-fix-full-hierarchy-chain.sql, sign in again, and reselect the parent plan.';
+        return 'Supabase blocked this save because the selected parent plan is not valid under the current schema. The plan saves under the currently signed-in email, not the typed full name. Sign in as the actual '+TYPE_LABEL[curType]+' account, rerun supabase-schema.sql and supabase-hierarchy-link-directory.sql, make sure the parent account has already saved its plan, then sign in again and reselect the parent plan.';
       }
     }
     return 'Supabase blocked this save under the current Row Level Security rules. The plan saves under the currently signed-in email, not the typed full name. Confirm you are signed in to the correct account and reran the latest supabase-schema.sql.';
@@ -346,7 +435,36 @@ function buildReviewQueueCard(plan){
 function resetSavedPlansCache(){
   savedPlansCache={scopeId:getDraftScopeId(),plans:null};
   reviewQueueCache={scopeId:getDraftScopeId(),plans:null};
+  dashboardCache={userId:currentUser&&currentUser.id?currentUser.id:null,data:null};
+  activityFeedCache={userId:currentUser&&currentUser.id?currentUser.id:null,items:null};
+  adminProfilesCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
+  userDirectoryCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
+  visibleAdminProfiles=[];
 }
+
+function getCurrentUserMetadata(user){
+  var metadata = {
+    role_type: '',
+    display_name: ''
+  };
+  if (!user) {
+    return metadata;
+  }
+  if (user.user_metadata && typeof user.user_metadata === 'object') {
+    metadata.role_type = user.user_metadata.role_type || user.user_metadata.roleType || '';
+    metadata.display_name = user.user_metadata.display_name || user.user_metadata.displayName || '';
+  }
+  if (user.raw_user_meta_data && typeof user.raw_user_meta_data === 'object') {
+    metadata.role_type = metadata.role_type || user.raw_user_meta_data.role_type || user.raw_user_meta_data.roleType || '';
+    metadata.display_name = metadata.display_name || user.raw_user_meta_data.display_name || user.raw_user_meta_data.displayName || '';
+    if (user.raw_user_meta_data.data && typeof user.raw_user_meta_data.data === 'object') {
+      metadata.role_type = metadata.role_type || user.raw_user_meta_data.data.role_type || user.raw_user_meta_data.data.roleType || '';
+      metadata.display_name = metadata.display_name || user.raw_user_meta_data.data.display_name || user.raw_user_meta_data.data.displayName || '';
+    }
+  }
+  return metadata;
+}
+
 async function fetchSavedPlans(forceRefresh){
   var scopeId=getDraftScopeId();
   if(!forceRefresh&&savedPlansCache.scopeId===scopeId&&Array.isArray(savedPlansCache.plans)){
@@ -364,6 +482,341 @@ async function fetchReviewQueue(forceRefresh){
   var plans=await window.GutguardPlanApi.listReviewQueue();
   reviewQueueCache={scopeId:scopeId,plans:plans.slice()};
   return plans;
+}
+async function fetchCurrentUserProfile(forceRefresh){
+  if(!currentUser||!(window.GutguardPlanApi&&window.GutguardPlanApi.getMyProfile)) {
+    currentUserProfile=null;
+    return null;
+  }
+  if(!forceRefresh&&currentUserProfile&&currentUserProfile.user_id===currentUser.id){
+    return currentUserProfile;
+  }
+  var profile=await window.GutguardPlanApi.getMyProfile();
+  var currentUserMetadata = getCurrentUserMetadata(currentUser);
+  if(window.GutguardPlanApi.syncMyProfile && (currentUserMetadata.role_type || currentUserMetadata.display_name)) {
+    var desiredRoleType = currentUserMetadata.role_type;
+    var desiredDisplayName = currentUserMetadata.display_name || (profile && profile.display_name) || '';
+    if(!profile || (desiredRoleType && profile.role_type !== desiredRoleType) || (desiredDisplayName && profile.display_name !== desiredDisplayName)) {
+      profile = await window.GutguardPlanApi.syncMyProfile({
+        role_type: desiredRoleType || (profile && profile.role_type) || 'member',
+        display_name: desiredDisplayName
+      });
+    }
+  }
+  if(!profile && window.GutguardPlanApi.syncMyProfile){
+    var syncPayload = {};
+    if(currentUserMetadata.display_name) {
+      syncPayload.display_name = currentUserMetadata.display_name;
+    }
+    if(currentUserMetadata.role_type) {
+      syncPayload.role_type = currentUserMetadata.role_type;
+    }
+    if(Object.keys(syncPayload).length){
+      profile = await window.GutguardPlanApi.syncMyProfile(syncPayload);
+    }
+  }
+  currentUserProfile=profile||null;
+  return currentUserProfile;
+}
+async function fetchDashboardSummary(forceRefresh){
+  var userId=currentUser&&currentUser.id?currentUser.id:null;
+  if(!forceRefresh&&dashboardCache.userId===userId&&dashboardCache.data){
+    return dashboardCache.data;
+  }
+  var data=await window.GutguardPlanApi.getDashboardSummary();
+  dashboardCache={userId:userId,data:data||{}};
+  return dashboardCache.data;
+}
+async function fetchActivityFeed(forceRefresh){
+  var userId=currentUser&&currentUser.id?currentUser.id:null;
+  if(!forceRefresh&&activityFeedCache.userId===userId&&Array.isArray(activityFeedCache.items)){
+    return activityFeedCache.items.slice();
+  }
+  var items=await window.GutguardPlanApi.listPlanActivity(24);
+  activityFeedCache={userId:userId,items:(items||[]).slice()};
+  return items||[];
+}
+async function fetchAdminProfiles(forceRefresh){
+  var userId=currentUser&&currentUser.id?currentUser.id:null;
+  if(!forceRefresh&&adminProfilesCache.userId===userId&&Array.isArray(adminProfilesCache.profiles)){
+    return adminProfilesCache.profiles.slice();
+  }
+  var profiles=await window.GutguardPlanApi.listUserProfiles();
+  adminProfilesCache={userId:userId,profiles:(profiles||[]).slice()};
+  return profiles||[];
+}
+async function fetchUserDirectory(forceRefresh){
+  var userId=currentUser&&currentUser.id?currentUser.id:null;
+  if(!forceRefresh&&userDirectoryCache.userId===userId&&Array.isArray(userDirectoryCache.profiles)){
+    return userDirectoryCache.profiles.slice();
+  }
+  var profiles=await window.GutguardPlanApi.listDirectoryProfiles();
+  userDirectoryCache={userId:userId,profiles:(profiles||[]).slice()};
+  return profiles||[];
+}
+function buildDashboardStatCard(stat){
+  var card=document.createElement('div');
+  card.className='saved-plan-stat-card';
+  var label=document.createElement('div');
+  label.className='saved-plan-stat-label';
+  label.textContent=stat.label;
+  var value=document.createElement('div');
+  value.className='saved-plan-stat-value';
+  value.textContent=stat.value;
+  var meta=document.createElement('div');
+  meta.className='saved-plan-stat-meta';
+  meta.textContent=stat.meta;
+  card.appendChild(label);
+  card.appendChild(value);
+  card.appendChild(meta);
+  return card;
+}
+function buildActivityCard(item){
+  var card=document.createElement('div');
+  card.className='activity-card';
+  var eyebrow=document.createElement('div');
+  eyebrow.className='activity-eyebrow';
+  eyebrow.textContent=getActivityActionLabel(item.action);
+  card.appendChild(eyebrow);
+  var title=document.createElement('div');
+  title.className='activity-title';
+  title.textContent=(item.plan_full_name||'System Activity')+(item.plan_role_type?(' | '+getRoleLabel(item.plan_role_type)):'');
+  card.appendChild(title);
+  var meta=document.createElement('div');
+  meta.className='activity-meta';
+  meta.textContent='By '+(item.actor_name||item.actor_email||'System')+' | '+formatSavedAt(item.created_at);
+  card.appendChild(meta);
+  var detail=document.createElement('div');
+  detail.className='activity-detail';
+  var detailParts=[item.detail||'Activity recorded.'];
+  if(item.status_before||item.status_after){
+    detailParts.push('Status: '+(item.status_before||'-')+' -> '+(item.status_after||'-'));
+  }
+  if(item.plan_id){
+    detailParts.push('Plan ID: '+item.plan_id);
+  }
+  detail.textContent=detailParts.join(' | ');
+  card.appendChild(detail);
+  return card;
+}
+function buildUserDirectoryCard(profile){
+  var card=document.createElement('div');
+  card.className='saved-plan-card';
+
+  var top=document.createElement('div');
+  top.className='saved-plan-top';
+  var role=document.createElement('div');
+  role.className='saved-plan-role';
+  role.textContent=getRoleLabel(profile.role_type);
+  top.appendChild(role);
+  var status=document.createElement('div');
+  status.className='saved-plan-status '+(profile.can_link_as_parent?'approved':'draft');
+  status.textContent=profile.can_link_as_parent?'plan ready':'awaiting plan';
+  top.appendChild(status);
+  card.appendChild(top);
+
+  var name=document.createElement('div');
+  name.className='saved-plan-name';
+  name.textContent=profile.display_name||profile.email||'(No Name)';
+  card.appendChild(name);
+
+  var email=document.createElement('div');
+  email.className='saved-plan-meta';
+  email.textContent=profile.email||'';
+  card.appendChild(email);
+
+  var meta=document.createElement('div');
+  meta.className='saved-plan-meta';
+  meta.style.marginTop='.25rem';
+  meta.textContent=profile.latest_plan_id
+    ?('Latest plan: '+(profile.latest_plan_status||'draft')+' | '+formatSavedAt(profile.latest_plan_updated_at))
+    :'This account still needs its first plan before it can appear as a parent link.';
+  card.appendChild(meta);
+
+  if(profile.latest_plan_id){
+    var actions=document.createElement('div');
+    actions.className='saved-plan-actions';
+    var openBtn=document.createElement('button');
+    openBtn.className='btn bto';
+    openBtn.type='button';
+    openBtn.textContent='Open Latest Plan';
+    openBtn.addEventListener('click',function(){
+      openSavedPlan(profile.latest_plan_id, profile.role_type);
+    });
+    actions.appendChild(openBtn);
+    card.appendChild(actions);
+  }
+
+  return card;
+}
+function buildAdminProfileCard(profile){
+  var card=document.createElement('div');
+  card.className='admin-profile-card';
+  card.dataset.userId=profile.user_id;
+
+  var top=document.createElement('div');
+  top.className='admin-profile-top';
+  var info=document.createElement('div');
+  var name=document.createElement('div');
+  name.className='admin-profile-name';
+  name.textContent=profile.display_name||'(No Name)';
+  info.appendChild(name);
+  var email=document.createElement('div');
+  email.className='admin-profile-email';
+  email.textContent=profile.email||'';
+  info.appendChild(email);
+  top.appendChild(info);
+  var badge=document.createElement('div');
+  badge.className='admin-profile-badge';
+  badge.textContent=getRoleLabel(profile.role_type);
+  top.appendChild(badge);
+  card.appendChild(top);
+
+  var grid=document.createElement('div');
+  grid.className='admin-profile-grid';
+
+  var displayField=document.createElement('div');
+  displayField.className='admin-profile-field';
+  var displayLabel=document.createElement('label');
+  displayLabel.textContent='Display Name';
+  var displayInput=document.createElement('input');
+  displayInput.type='text';
+  displayInput.value=profile.display_name||'';
+  displayInput.id='admin-display-name-'+profile.user_id;
+  displayField.appendChild(displayLabel);
+  displayField.appendChild(displayInput);
+  grid.appendChild(displayField);
+
+  var roleField=document.createElement('div');
+  roleField.className='admin-profile-field';
+  var roleLabel=document.createElement('label');
+  roleLabel.textContent='Role';
+  var roleSelect=document.createElement('select');
+  roleSelect.id='admin-role-type-'+profile.user_id;
+  ['member','leader','squad','platoon','o1'].forEach(function(roleType){
+    var option=document.createElement('option');
+    option.value=roleType;
+    option.textContent=getRoleLabel(roleType);
+    option.selected=profile.role_type===roleType;
+    roleSelect.appendChild(option);
+  });
+  roleField.appendChild(roleLabel);
+  roleField.appendChild(roleSelect);
+  grid.appendChild(roleField);
+
+  var activeField=document.createElement('div');
+  activeField.className='admin-profile-field';
+  var activeLabel=document.createElement('label');
+  activeLabel.textContent='Active';
+  var activeSelect=document.createElement('select');
+  activeSelect.id='admin-active-'+profile.user_id;
+  ['true','false'].forEach(function(flag){
+    var option=document.createElement('option');
+    option.value=flag;
+    option.textContent=flag==='true'?'Active':'Inactive';
+    option.selected=String(profile.is_active)!=='false'?flag==='true':flag==='false';
+    activeSelect.appendChild(option);
+  });
+  activeField.appendChild(activeLabel);
+  activeField.appendChild(activeSelect);
+  grid.appendChild(activeField);
+
+  var approvalField=document.createElement('div');
+  approvalField.className='admin-profile-field';
+  var approvalLabel=document.createElement('label');
+  approvalLabel.textContent='Approval';
+  var approvalSelect=document.createElement('select');
+  approvalSelect.id='admin-approval-'+profile.user_id;
+  ['pending','approved','rejected'].forEach(function(status){
+    var option=document.createElement('option');
+    option.value=status;
+    option.textContent=status.charAt(0).toUpperCase()+status.slice(1);
+    option.selected=(profile.approval_status||'approved')===status;
+    approvalSelect.appendChild(option);
+  });
+  approvalField.appendChild(approvalLabel);
+  approvalField.appendChild(approvalSelect);
+  grid.appendChild(approvalField);
+
+  var adminField=document.createElement('div');
+  adminField.className='admin-profile-field';
+  var adminLabel=document.createElement('label');
+  adminLabel.textContent='Admin Access';
+  var adminSelect=document.createElement('select');
+  adminSelect.id='admin-is-admin-'+profile.user_id;
+  ['false','true'].forEach(function(flag){
+    var option=document.createElement('option');
+    option.value=flag;
+    option.textContent=flag==='true'?'Admin':'Standard';
+    option.selected=profile.is_admin===true?flag==='true':flag==='false';
+    adminSelect.appendChild(option);
+  });
+  adminField.appendChild(adminLabel);
+  adminField.appendChild(adminSelect);
+  grid.appendChild(adminField);
+
+  var latestField=document.createElement('div');
+  latestField.className='admin-profile-field';
+  var latestLabel=document.createElement('label');
+  latestLabel.textContent='Latest Plan';
+  var latestInput=document.createElement('input');
+  latestInput.type='text';
+  latestInput.disabled=true;
+  latestInput.value=profile.latest_plan_id
+    ?((profile.latest_plan_status||'draft')+' | '+formatSavedAt(profile.latest_plan_updated_at))
+    :'No plan yet';
+  latestField.appendChild(latestLabel);
+  latestField.appendChild(latestInput);
+  grid.appendChild(latestField);
+
+  var approvedField=document.createElement('div');
+  approvedField.className='admin-profile-field';
+  var approvedLabel=document.createElement('label');
+  approvedLabel.textContent='Approved At';
+  var approvedInput=document.createElement('input');
+  approvedInput.type='text';
+  approvedInput.disabled=true;
+  approvedInput.value=profile.approved_at?formatSavedAt(profile.approved_at):'Not approved yet';
+  approvedField.appendChild(approvedLabel);
+  approvedField.appendChild(approvedInput);
+  grid.appendChild(approvedField);
+
+  var notesField=document.createElement('div');
+  notesField.className='admin-profile-field admin-profile-field-wide';
+  var notesLabel=document.createElement('label');
+  notesLabel.textContent='Notes';
+  var notesInput=document.createElement('textarea');
+  notesInput.id='admin-notes-'+profile.user_id;
+  notesInput.value=profile.notes||'';
+  notesField.appendChild(notesLabel);
+  notesField.appendChild(notesInput);
+  grid.appendChild(notesField);
+
+  card.appendChild(grid);
+
+  var actions=document.createElement('div');
+  actions.className='admin-profile-actions';
+  var saveBtn=document.createElement('button');
+  saveBtn.className='btn btp';
+  saveBtn.type='button';
+  saveBtn.textContent='Save';
+  saveBtn.addEventListener('click',function(){
+    saveAdminProfile(profile.user_id);
+  });
+  actions.appendChild(saveBtn);
+  if(profile.latest_plan_id){
+    var openBtn=document.createElement('button');
+    openBtn.className='btn bto';
+    openBtn.type='button';
+    openBtn.textContent='Open Latest Plan';
+    openBtn.addEventListener('click',function(){
+      openSavedPlan(profile.latest_plan_id, profile.role_type);
+    });
+    actions.appendChild(openBtn);
+  }
+  card.appendChild(actions);
+
+  return card;
 }
 function filterSavedPlans(plans){
   var roleEl=document.getElementById('saved-plans-filter');
@@ -385,6 +838,50 @@ function filterSavedPlans(plans){
       plan.parent_plan_id?'parent linked':''
     ].join(' ').toLowerCase();
     return haystack.indexOf(searchTerm)!==-1;
+  });
+}
+function filterActivityItems(items){
+  var searchEl=document.getElementById('activity-feed-search');
+  var actionEl=document.getElementById('activity-feed-action');
+  var roleEl=document.getElementById('activity-feed-role');
+  var searchTerm=searchEl&&searchEl.value?searchEl.value.trim().toLowerCase():'';
+  var actionFilter=actionEl&&actionEl.value?actionEl.value:'';
+  var roleFilter=roleEl&&roleEl.value?roleEl.value:'';
+  return (items||[]).filter(function(item){
+    if(actionFilter&&(item.action||'')!==actionFilter)return false;
+    if(roleFilter&&(item.plan_role_type||'')!==roleFilter)return false;
+    if(!searchTerm)return true;
+    var haystack=[
+      item.plan_full_name||'',
+      item.plan_role_type||'',
+      item.actor_name||'',
+      item.actor_email||'',
+      item.detail||'',
+      item.action||''
+    ].join(' ').toLowerCase();
+    return haystack.indexOf(searchTerm)!==-1;
+  });
+}
+function filterUserDirectoryProfiles(profiles){
+  var searchEl=document.getElementById('user-directory-search');
+  var roleEl=document.getElementById('user-directory-role');
+  var searchTerm=searchEl&&searchEl.value?searchEl.value.trim().toLowerCase():'';
+  var roleFilter=roleEl&&roleEl.value?roleEl.value:'';
+  return (profiles||[]).filter(function(profile){
+    if(roleFilter&&profile.role_type!==roleFilter)return false;
+    if(!searchTerm)return true;
+    var haystack=[
+      profile.display_name||'',
+      profile.email||'',
+      profile.role_type||'',
+      profile.can_link_as_parent?'ready':'awaiting'
+    ].join(' ').toLowerCase();
+    return haystack.indexOf(searchTerm)!==-1;
+  }).sort(function(a,b){
+    if(a.role_type!==b.role_type){
+      return String(a.role_type).localeCompare(String(b.role_type));
+    }
+    return String(a.display_name||a.email||'').localeCompare(String(b.display_name||b.email||''));
   });
 }
 function renderSavedPlanStats(allPlans, filteredPlans){
@@ -460,7 +957,7 @@ function updateSaveStatus(type, state){
     detail=state.detail||'';
   }else if(!apiReady){
     tone='n-danger';
-    message='Supabase is not configured yet. Set your project URL and anon key in supabase-config.js before saving.';
+    message='Supabase is not configured yet. Set your project URL and anon key in .env.local or supabase-config.js before saving.';
   }else if(!currentUser){
     tone='n-danger';
     message='Sign in first. Save, load, and saved-plan browsing are protected by Supabase auth and RLS.';
@@ -523,6 +1020,49 @@ function hasPlannerActivity(type){
   });
   return hasPlanner;
 }
+function getPlannerWarnings(type){
+  if(!type)return [];
+  var warnings = [];
+  var weeks = wkData[type] || {};
+  var activeWeeks = 0;
+  var datedEntries = 0;
+  var totalPi = 0;
+  var totalSales = 0;
+  Object.keys(weeks).forEach(function(week){
+    var hasWeekActivity = false;
+    var entries = weeks[week] || {};
+    Object.keys(entries).forEach(function(act){
+      var row = entries[act] || {};
+      if(row.date) datedEntries += 1;
+      totalPi += Number(row.pi || 0);
+      totalSales += Number(row.sales || 0);
+      if(row.date || Number(row.leads) || Number(row.att) || Number(row.pi) || Number(row.sales)){
+        hasWeekActivity = true;
+      }
+    });
+    if(hasWeekActivity){
+      activeWeeks += 1;
+    }
+  });
+  var tgtPi = Number(document.getElementById(type+'-tgt-pi')&&document.getElementById(type+'-tgt-pi').value)||0;
+  var tgtSales = Number(document.getElementById(type+'-tgt-sales')&&document.getElementById(type+'-tgt-sales').value)||0;
+  if(hasPlannerActivity(type) && activeWeeks < 2){
+    warnings.push('Planner activity is concentrated in only '+activeWeeks+' week'+(activeWeeks===1?'':'s')+'.');
+  }
+  if(hasPlannerActivity(type) && datedEntries === 0){
+    warnings.push('Planner entries have quantities but no activity dates yet.');
+  }
+  if(tgtPi > 0 && totalPi === 0){
+    warnings.push('Pay-in target is set but weekly pay-ins are still zero.');
+  }
+  if(tgtSales > 0 && totalSales === 0){
+    warnings.push('Sales target is set but weekly sales are still zero.');
+  }
+  if(SUB_ROLES[type] && (childPlans[type]||[]).length === 0 && (subMembers[type]||[]).length === 0){
+    warnings.push('No child plan or manual consolidation entry is attached yet.');
+  }
+  return warnings;
+}
 function canSubmitForm(type){
   var errors = [];
   var fullNameEl = document.querySelector('#info-name');
@@ -545,6 +1085,8 @@ function canSubmitForm(type){
       var parentState = parentSelect.dataset.parentState || '';
       if(parentState === 'auth-required'){
         errors.push('Sign in to load parent plans.');
+      } else if(parentState === 'access-blocked'){
+        errors.push(getCurrentUserAccessMessage('load parent plans'));
       } else if(parentState === 'no-parents'){
         errors.push('No parent plans found yet. Create one first.');
       } else if(parentState === 'load-error'){
@@ -581,6 +1123,9 @@ function getSectionProgress(type, submitState){
     }else if(parentState==='auth-required'){
       infoReady=false;
       infoNote='Sign in to load parent plans.';
+    }else if(parentState==='access-blocked'){
+      infoReady=false;
+      infoNote=getCurrentUserAccessMessage('load parent plans');
     }else if(parentState==='no-parents'){
       infoReady=false;
       infoNote='No parent '+TYPE_LABEL[parentRole]+' plan is available yet.';
@@ -737,9 +1282,12 @@ function refreshSubmitButtonState(type){
   var hint = document.getElementById(type+'-submit-hint');
   if(!btn) return;
   var state = canSubmitForm(type);
+  var warnings = getPlannerWarnings(type);
   btn.disabled = !state.ready;
   if(hint){
-    hint.textContent = state.ready ? 'Ready to submit.' : state.errors.join(' ');
+    hint.textContent = state.ready
+      ? (warnings.length ? ('Ready to submit. Warning: '+warnings[0]) : 'Ready to submit.')
+      : state.errors.join(' ');
   }
   updateSectionProgress(type,state);
   updateValidationMarkers(type,state.errors);
@@ -902,23 +1450,272 @@ function renderAuthState(){
   var credentialsEl=document.getElementById('auth-credentials');
   var signedInEl=document.getElementById('auth-signed-in');
   var emailDisplay=document.getElementById('auth-email-display');
+  var displayNameDisplay=document.getElementById('auth-display-name-display');
+  var roleDisplay=document.getElementById('auth-role-display');
+  var accessStateEl=document.getElementById('auth-access-state');
+  var dashboardWrap=document.getElementById('dashboard-wrap');
+  var myProfileWrap=document.getElementById('my-profile-wrap');
+  var userDirectoryWrap=document.getElementById('user-directory-wrap');
+  var adminWrap=document.getElementById('admin-directory-wrap');
   if(!(window.GutguardSupabase&&window.GutguardSupabase.isConfigured&&window.GutguardSupabase.isConfigured())){
     if(credentialsEl) credentialsEl.style.display='flex';
     if(signedInEl) signedInEl.style.display='none';
+    if(accessStateEl) accessStateEl.textContent='Configure Supabase in .env.local or supabase-config.js to enable protected access.';
+    if(dashboardWrap) dashboardWrap.style.display='none';
+    if(myProfileWrap) myProfileWrap.style.display='none';
+    if(userDirectoryWrap) userDirectoryWrap.style.display='block';
+    if(adminWrap) adminWrap.style.display='none';
     return;
   }
   if(currentUser){
     if(credentialsEl) credentialsEl.style.display='none';
     if(signedInEl) signedInEl.style.display='flex';
     if(emailDisplay) emailDisplay.textContent = currentUser.email;
+    if(displayNameDisplay) displayNameDisplay.textContent = getCurrentUserDisplayName()||'';
+    if(roleDisplay){
+      var roleParts=[];
+      if(getCurrentUserRoleType())roleParts.push(getRoleLabel(getCurrentUserRoleType()));
+      if(currentUserProfile&&currentUserProfile.is_admin===true)roleParts.push('Admin');
+      roleDisplay.textContent=roleParts.length?('('+roleParts.join(' | ')+')'):'';
+    }
+    if(accessStateEl) accessStateEl.textContent = getCurrentUserAccessMessage('load plans, save drafts, and review submissions') || 'Verified and approved. Full access is active.';
+    if(dashboardWrap) dashboardWrap.style.display=isCurrentUserAdmin()?'block':'none';
+    if(myProfileWrap) myProfileWrap.style.display='block';
+    if(userDirectoryWrap) userDirectoryWrap.style.display='block';
+    if(adminWrap) adminWrap.style.display=isCurrentUserAdmin()?'block':'none';
   }else{
     if(credentialsEl) credentialsEl.style.display='flex';
     if(signedInEl) signedInEl.style.display='none';
     if(emailDisplay) emailDisplay.textContent='';
+    if(displayNameDisplay) displayNameDisplay.textContent='';
+    if(roleDisplay) roleDisplay.textContent='';
+    if(accessStateEl) accessStateEl.textContent='Sign in to see your verification and approval status.';
+    if(dashboardWrap) dashboardWrap.style.display='none';
+    if(myProfileWrap) myProfileWrap.style.display='none';
+    if(userDirectoryWrap) userDirectoryWrap.style.display='block';
+    if(adminWrap) adminWrap.style.display='none';
   }
+}
+async function renderMyProfilePanel(forceRefresh){
+  var wrap=document.getElementById('my-profile-wrap');
+  var displayNameEl=document.getElementById('profile-display-name');
+  var roleEl=document.getElementById('profile-role-type');
+  var notesEl=document.getElementById('profile-notes');
+  if(!wrap||!displayNameEl||!roleEl||!notesEl)return;
+  if(!(window.GutguardPlanApi&&window.GutguardPlanApi.getMyProfile)||!currentUser){
+    wrap.style.display='none';
+    return;
+  }
+  wrap.style.display='block';
+  try{
+    var profile=await fetchCurrentUserProfile(!!forceRefresh);
+    displayNameEl.value=profile&&profile.display_name?profile.display_name:'';
+    roleEl.value=profile&&profile.role_type?getRoleLabel(profile.role_type):'';
+    notesEl.value=profile&&profile.notes?profile.notes:'';
+  }catch(err){
+    displayNameEl.value='';
+    roleEl.value='';
+    notesEl.value='';
+  }
+  renderAuthState();
+}
+async function renderDashboardSummary(forceRefresh){
+  var container=document.getElementById('dashboard-stats');
+  if(!container)return;
+  if(!(window.GutguardPlanApi&&window.GutguardPlanApi.getDashboardSummary&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
+    clearNode(container);
+    container.appendChild(buildDashboardStatCard({label:'Accounts',value:'-',meta:'Configure Supabase first'}));
+    return;
+  }
+  if(!currentUser){
+    clearNode(container);
+    container.appendChild(buildDashboardStatCard({label:'Dashboard',value:'Hidden',meta:'Sign in as an approved admin to load dashboard data'}));
+    return;
+  }
+  if(!isCurrentUserAdmin()){
+    clearNode(container);
+    container.appendChild(buildDashboardStatCard({label:'Dashboard',value:'Hidden',meta:'Admin access is required for system-wide metrics.'}));
+    return;
+  }
+  try{
+    var summary=await fetchDashboardSummary(!!forceRefresh);
+    var stats=[
+      {label:'Accounts',value:String(summary.total_accounts||0),meta:'Approved: '+String(summary.approved_accounts||0)+' | Pending: '+String(summary.pending_accounts||0)},
+      {label:'Plans',value:String(summary.total_plans||0),meta:'Submitted: '+String(summary.submitted_plans||0)+' | Drafts: '+String(summary.draft_plans||0)},
+      {label:'Missing Links',value:String(summary.missing_parent_links||0),meta:'Plans waiting for a parent selection'},
+      {label:'Pending Review',value:String(summary.pending_reviews||0),meta:'Admins: '+String(summary.admin_accounts||0)+(summary.recent_activity_at?(' | Recent: '+formatSavedAt(summary.recent_activity_at)):'')}
+    ];
+    clearNode(container);
+    stats.forEach(function(stat){
+      container.appendChild(buildDashboardStatCard(stat));
+    });
+  }catch(err){
+    clearNode(container);
+    container.appendChild(buildDashboardStatCard({label:'Dashboard',value:'Error',meta:err&&err.message?err.message:'Unable to load summary'}));
+  }
+}
+async function renderActivityFeed(forceRefresh){
+  var listEl=document.getElementById('activity-feed-list');
+  if(!listEl)return;
+  if(!(window.GutguardPlanApi&&window.GutguardPlanApi.listPlanActivity&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
+    setSavedPlansMessage(listEl,'Configure Supabase in .env.local or supabase-config.js to load recent activity.');
+    return;
+  }
+  if(!currentUser){
+    setSavedPlansMessage(listEl,'Sign in to load the recent activity feed.');
+    return;
+  }
+  if(!hasCurrentUserFullAccess()){
+    setSavedPlansMessage(listEl,getCurrentUserAccessMessage('load the recent activity feed'));
+    return;
+  }
+  try{
+    var items=await fetchActivityFeed(!!forceRefresh);
+    var filteredItems=filterActivityItems(items);
+    if(!filteredItems.length){
+      setSavedPlansMessage(listEl,items.length?'No recent activity matched the current filter.':'No recent activity has been recorded yet.');
+      return;
+    }
+    clearNode(listEl);
+    filteredItems.forEach(function(item){
+      listEl.appendChild(buildActivityCard(item));
+    });
+  }catch(err){
+    reportClientIssue('renderActivityFeed', err);
+    setSavedPlansMessage(listEl,'Failed to load recent activity. '+(err&&err.message?err.message:'Unknown error.'));
+  }
+}
+async function renderUserDirectory(forceRefresh){
+  var wrap=document.getElementById('user-directory-wrap');
+  var listEl=document.getElementById('user-directory-list');
+  if(!wrap||!listEl)return;
+  if(!(window.GutguardPlanApi&&window.GutguardPlanApi.listDirectoryProfiles&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
+    wrap.style.display='block';
+    setSavedPlansMessage(listEl,'Configure Supabase in .env.local or supabase-config.js to load the user directory.');
+    return;
+  }
+  if(!currentUser){
+    wrap.style.display='block';
+    setSavedPlansMessage(listEl,'Sign in to browse the approved user directory.');
+    return;
+  }
+  if(!hasCurrentUserFullAccess()){
+    wrap.style.display='block';
+    setSavedPlansMessage(listEl,getCurrentUserAccessMessage('browse the user directory'));
+    return;
+  }
+  wrap.style.display='block';
+  try{
+    var profiles=await fetchUserDirectory(!!forceRefresh);
+    var filteredProfiles=filterUserDirectoryProfiles(profiles);
+    if(!filteredProfiles.length){
+      setSavedPlansMessage(listEl,profiles.length?'No approved users matched the current directory filter.':'No approved users are ready to show yet.');
+      return;
+    }
+    clearNode(listEl);
+    filteredProfiles.forEach(function(profile){
+      listEl.appendChild(buildUserDirectoryCard(profile));
+    });
+  }catch(err){
+    reportClientIssue('renderUserDirectory', err);
+    setSavedPlansMessage(listEl,'Failed to load the user directory. '+(err&&err.message?err.message:'Unknown error.'));
+  }
+}
+function filterAdminProfiles(profiles){
+  var searchEl=document.getElementById('admin-profiles-search');
+  var roleEl=document.getElementById('admin-profiles-role');
+  var approvalEl=document.getElementById('admin-profiles-approval');
+  var adminEl=document.getElementById('admin-profiles-admin');
+  var sortEl=document.getElementById('admin-profiles-sort');
+  var searchTerm=searchEl&&searchEl.value?searchEl.value.trim().toLowerCase():'';
+  var roleFilter=roleEl&&roleEl.value?roleEl.value:'';
+  var approvalFilter=approvalEl&&approvalEl.value?approvalEl.value:'';
+  var adminFilter=adminEl&&adminEl.value?adminEl.value:'';
+  var filtered=(profiles||[]).filter(function(profile){
+    if(roleFilter&&profile.role_type!==roleFilter)return false;
+    if(approvalFilter&&(profile.approval_status||'')!==approvalFilter)return false;
+    if(adminFilter==='admin'&&profile.is_admin!==true)return false;
+    if(adminFilter==='standard'&&profile.is_admin===true)return false;
+    if(!searchTerm)return true;
+    var haystack=[
+      profile.email||'',
+      profile.display_name||'',
+      profile.role_type||'',
+      profile.approval_status||'',
+      profile.is_admin?'admin':'',
+      profile.notes||''
+    ].join(' ').toLowerCase();
+    return haystack.indexOf(searchTerm)!==-1;
+  });
+  var sortMode=sortEl&&sortEl.value?sortEl.value:'name';
+  filtered.sort(function(a,b){
+    if(sortMode==='newest'){
+      return getTimeValue(b.created_at)-getTimeValue(a.created_at);
+    }
+    if(sortMode==='latest-plan'){
+      return getTimeValue(b.latest_plan_updated_at)-getTimeValue(a.latest_plan_updated_at);
+    }
+    if(sortMode==='pending-first'){
+      var aPending=(a.approval_status||'')==='pending'?0:1;
+      var bPending=(b.approval_status||'')==='pending'?0:1;
+      if(aPending!==bPending)return aPending-bPending;
+    }
+    return String(a.display_name||a.email||'').localeCompare(String(b.display_name||b.email||''));
+  });
+  return filtered;
+}
+async function renderAdminDirectory(forceRefresh){
+  var wrap=document.getElementById('admin-directory-wrap');
+  var listEl=document.getElementById('admin-profiles-list');
+  if(!wrap||!listEl)return;
+  if(!currentUser||!isCurrentUserAdmin()){
+    wrap.style.display='none';
+    return;
+  }
+  wrap.style.display='block';
+  if(!(window.GutguardPlanApi&&window.GutguardPlanApi.listUserProfiles)){
+    setSavedPlansMessage(listEl,'Admin directory helpers are unavailable.');
+    return;
+  }
+  try{
+    var profiles=await fetchAdminProfiles(!!forceRefresh);
+    var filteredProfiles=filterAdminProfiles(profiles);
+    visibleAdminProfiles=filteredProfiles.slice();
+    if(!filteredProfiles.length){
+      setSavedPlansMessage(listEl,profiles.length?'No user profiles matched the current filter.':'No user profiles are available yet.');
+      return;
+    }
+    clearNode(listEl);
+    filteredProfiles.forEach(function(profile){
+      listEl.appendChild(buildAdminProfileCard(profile));
+    });
+  }catch(err){
+    reportClientIssue('renderAdminDirectory', err);
+    setSavedPlansMessage(listEl,'Failed to load the admin directory. '+(err&&err.message?err.message:'Unknown error.'));
+  }
+}
+async function refreshDashboard(forceRefresh){
+  await renderDashboardSummary(!!forceRefresh);
+}
+async function refreshActivityFeed(forceRefresh){
+  await renderActivityFeed(!!forceRefresh);
+}
+async function refreshUserDirectory(forceRefresh){
+  await renderUserDirectory(!!forceRefresh);
+}
+async function refreshAdminDirectory(forceRefresh){
+  await renderAdminDirectory(!!forceRefresh);
+}
+async function refreshHomeOperations(forceRefresh){
+  await renderMyProfilePanel(!!forceRefresh);
+  await renderDashboardSummary(!!forceRefresh);
+  await renderActivityFeed(!!forceRefresh);
+  await renderUserDirectory(!!forceRefresh);
+  await renderAdminDirectory(!!forceRefresh);
 }
 async function bootstrapAuthState(){
   if(!(window.GutguardSupabase&&window.GutguardSupabase.isConfigured&&window.GutguardSupabase.isConfigured())){
+    currentUserProfile=null;
     renderAuthState();
     return;
   }
@@ -928,8 +1725,10 @@ async function bootstrapAuthState(){
     currentUser=null;
   }
   resetSavedPlansCache();
+  await fetchCurrentUserProfile(true).catch(function(){ currentUserProfile=null; });
   renderAuthState();
   refreshSavedPlans(true);
+  refreshHomeOperations(true);
 }
 async function handleSignIn(){
   try{
@@ -938,8 +1737,10 @@ async function handleSignIn(){
     await window.GutguardSupabase.signInWithPassword(email,password);
     currentUser=await window.GutguardSupabase.getUser();
     resetSavedPlansCache();
+    await fetchCurrentUserProfile(true).catch(function(){ currentUserProfile=null; });
     renderAuthState();
     refreshSavedPlans(true);
+    refreshHomeOperations(true);
     showToast('Signed in as '+getCurrentUserEmail()+'.');
   }catch(err){
     showToast(err&&err.message?err.message:'Sign in failed.');
@@ -953,12 +1754,23 @@ async function handleSignUp(){
   try{
     var email=document.getElementById('auth-email').value.trim();
     var password=document.getElementById('auth-password').value;
-    await window.GutguardSupabase.signUpWithPassword(email,password);
+    var displayNameEl=document.getElementById('auth-display-name');
+    var roleTypeEl=document.getElementById('auth-role-type');
+    var displayName=displayNameEl&&displayNameEl.value?displayNameEl.value.trim():'';
+    var roleType=roleTypeEl&&roleTypeEl.value?roleTypeEl.value:'member';
+    await window.GutguardSupabase.signUpWithPassword(email,password,{
+      display_name:displayName,
+      role_type:roleType
+    });
     currentUser=await window.GutguardSupabase.getUser();
     resetSavedPlansCache();
+    currentUserProfile = await fetchCurrentUserProfile(true).catch(function(){ return null; });
     renderAuthState();
     refreshSavedPlans(true);
-    showToast(currentUser?'Account created and signed in.':'Account created. Check your email confirmation settings.');
+    refreshHomeOperations(true);
+    showToast(currentUser
+      ?'Account created. Verify your email, then wait for admin approval before protected access unlocks.'
+      :'Account created. Check your email for the verification link.');
   }catch(err){
     showToast(err&&err.message?err.message:'Sign up failed.');
   }
@@ -967,13 +1779,116 @@ async function handleSignOut(){
   try{
     await window.GutguardSupabase.signOut();
     currentUser=null;
+    currentUserProfile=null;
     resetSavedPlansCache();
     renderAuthState();
     refreshSavedPlans(true);
+    refreshHomeOperations(true);
     showToast('Signed out.');
   }catch(err){
     showToast(err&&err.message?err.message:'Sign out failed.');
   }
+}
+async function saveMyProfile(){
+  if(!(window.GutguardPlanApi&&window.GutguardPlanApi.syncMyProfile)){
+    showToast('Profile helpers are unavailable.');
+    return;
+  }
+  try{
+    currentUserProfile=await window.GutguardPlanApi.syncMyProfile({
+      display_name:document.getElementById('profile-display-name')&&document.getElementById('profile-display-name').value.trim(),
+      notes:document.getElementById('profile-notes')&&document.getElementById('profile-notes').value.trim()
+    });
+    resetSavedPlansCache();
+    renderAuthState();
+    refreshSavedPlans(true);
+    refreshHomeOperations(true);
+    if(curType){
+      await populateParentOptions(curType);
+      refreshSubmitButtonState(curType);
+    }
+    showToast('Profile saved.');
+  }catch(err){
+    reportClientIssue('saveMyProfile', err);
+    showToast(err&&err.message?err.message:'Unable to save your profile.');
+  }
+}
+async function saveAdminProfile(userId){
+  if(!(window.GutguardPlanApi&&window.GutguardPlanApi.adminUpdateUserProfile)){
+    showToast('Admin profile helpers are unavailable.');
+    return;
+  }
+  try{
+    await window.GutguardPlanApi.adminUpdateUserProfile(userId,{
+      display_name:document.getElementById('admin-display-name-'+userId).value.trim(),
+      role_type:document.getElementById('admin-role-type-'+userId).value,
+      is_admin:document.getElementById('admin-is-admin-'+userId).value==='true',
+      is_active:document.getElementById('admin-active-'+userId).value==='true',
+      approval_status:document.getElementById('admin-approval-'+userId).value,
+      notes:document.getElementById('admin-notes-'+userId).value.trim()
+    });
+    adminProfilesCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
+    userDirectoryCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
+    dashboardCache={userId:currentUser&&currentUser.id?currentUser.id:null,data:null};
+    activityFeedCache={userId:currentUser&&currentUser.id?currentUser.id:null,items:null};
+    if(currentUser&&userId===currentUser.id){
+      await fetchCurrentUserProfile(true).catch(function(){});
+      renderAuthState();
+    }
+    await renderAdminDirectory(true);
+    await renderDashboardSummary(true);
+    await renderUserDirectory(true);
+    await renderActivityFeed(true);
+    showToast('User profile updated.');
+  }catch(err){
+    reportClientIssue('saveAdminProfile', err, {userId:userId});
+    showToast(err&&err.message?err.message:'Unable to update the user profile.');
+  }
+}
+async function bulkUpdateVisibleProfiles(nextStatus){
+  if(!isCurrentUserAdmin()){
+    showToast('Admin access is required.');
+    return;
+  }
+  var targets=(visibleAdminProfiles||[]).filter(function(profile){
+    return (profile.approval_status||'')==='pending';
+  });
+  if(!targets.length){
+    showToast('No visible pending accounts matched the current admin filter.');
+    return;
+  }
+  if(!confirm((nextStatus==='approved'?'Approve ':'Reject ')+targets.length+' visible pending account(s)?')) return;
+  try{
+    for(var index=0;index<targets.length;index+=1){
+      var profile=targets[index];
+      await window.GutguardPlanApi.adminUpdateUserProfile(profile.user_id,{
+        display_name:profile.display_name,
+        role_type:profile.role_type,
+        is_admin:profile.is_admin===true,
+        is_active:profile.is_active!==false,
+        approval_status:nextStatus,
+        notes:profile.notes||''
+      });
+    }
+    adminProfilesCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
+    userDirectoryCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
+    dashboardCache={userId:currentUser&&currentUser.id?currentUser.id:null,data:null};
+    activityFeedCache={userId:currentUser&&currentUser.id?currentUser.id:null,items:null};
+    await renderAdminDirectory(true);
+    await renderDashboardSummary(true);
+    await renderUserDirectory(true);
+    await renderActivityFeed(true);
+    showToast('Updated '+targets.length+' account(s).');
+  }catch(err){
+    reportClientIssue('bulkUpdateVisibleProfiles', err, {nextStatus:nextStatus});
+    showToast(err&&err.message?err.message:'Bulk update failed.');
+  }
+}
+function bulkApprovePendingProfiles(){
+  return bulkUpdateVisibleProfiles('approved');
+}
+function bulkRejectPendingProfiles(){
+  return bulkUpdateVisibleProfiles('rejected');
 }
 async function populateParentOptions(type, selectedPlanId){
   var selectEl=document.getElementById(type+'-parent-plan-id');
@@ -998,13 +1913,21 @@ async function populateParentOptions(type, selectedPlanId){
     selectEl.dataset.parentState='auth-required';
     return;
   }
+  if(!hasCurrentUserFullAccess()){
+    setSelectMessage(selectEl,'Access pending');
+    selectEl.disabled=true;
+    selectEl.dataset.parentState='access-blocked';
+    if(errorEl) errorEl.textContent=getCurrentUserAccessMessage('load parent plans');
+    refreshSubmitButtonState(type);
+    return;
+  }
   try{
     var parents=await window.GutguardPlanApi.listPotentialParents(type);
     if(!parents.length){
       setSelectMessage(selectEl,'No '+(TYPE_LABEL[PARENT_ROLE[type]]||PARENT_ROLE[type])+' plans found');
       selectEl.disabled=true;
       selectEl.dataset.parentState='no-parents';
-      if(errorEl) errorEl.textContent='No parent plans are available yet. Make sure the parent user is assigned to the correct team chain and has already saved a parent plan.';
+      if(errorEl) errorEl.textContent='No parent plans are available yet. Make sure a signed-up parent account has already saved a parent plan for that role.';
       return;
     }
     setSelectMessage(selectEl,'Select a parent plan');
@@ -1020,7 +1943,7 @@ async function populateParentOptions(type, selectedPlanId){
     if(currentValue&&!currentMatched){
       selectEl.value='';
       setFormDirty(true,true);
-      if(errorEl) errorEl.textContent='Your previously selected parent plan is no longer valid for your current team chain. Choose a valid parent plan again.';
+      if(errorEl) errorEl.textContent='Your previously selected parent plan is no longer valid. Choose a valid parent plan again.';
     }
     if(!currentValue&&parents.length===1){
       selectEl.value=parents[0].id;
@@ -1033,7 +1956,7 @@ async function populateParentOptions(type, selectedPlanId){
     setSelectMessage(selectEl,'Unable to load parent plans');
     selectEl.disabled=true;
     selectEl.dataset.parentState='load-error';
-    if(errorEl) errorEl.textContent = 'Unable to load parent plans. Check that you reran the latest schema, signed in, and seeded memberships and parent plans.';
+    if(errorEl) errorEl.textContent = 'Unable to load parent plans. Check that you reran the latest schema, verified the account, and approved the account in the admin directory.';
     if(retryBtn) retryBtn.style.display='inline-flex';
     refreshSubmitButtonState(type);
   }
@@ -1044,7 +1967,7 @@ async function ensureValidParentSelectionBeforeSave(type, mode){
   await populateParentOptions(type);
   if(hasValidParentSelection(type)) return;
   if(mode==='draft'&&!initialState.value) return;
-  throw new Error('Select a valid parent '+TYPE_LABEL[PARENT_ROLE[type]]+' plan before saving. If the dropdown is empty, fix the team chain in Supabase and create the parent plan first.');
+  throw new Error('Select a valid parent '+TYPE_LABEL[PARENT_ROLE[type]]+' plan before saving. If the dropdown is empty, make sure a signed-up parent account has already created that parent plan.');
 }
 async function refreshChildPlans(type){
   childPlans[type]=[];
@@ -1085,6 +2008,10 @@ function syncInteractiveAccessibility(root){
 }
 
 async function startForm(type, explicitPlanId){
+  if(currentUser&&!hasCurrentUserFullAccess()){
+    showToast(getCurrentUserAccessMessage('open the planner'));
+    return;
+  }
   curType=type; curWeek=1;
   clearDraftAutosaveTimer();
   setFormDirty(false,true);
@@ -1093,6 +2020,10 @@ async function startForm(type, explicitPlanId){
   document.getElementById('forminner').innerHTML = buildForm(type);
   attachDraftTracking();
   document.querySelectorAll('.auto-today').forEach(el=>{if(!el.value)el.value=todayStr();});
+  var nameEl=document.getElementById('info-name');
+  if(nameEl&&currentUserProfile&&currentUserProfile.display_name&&!nameEl.value){
+    nameEl.value=currentUserProfile.display_name;
+  }
   await populateParentOptions(type);
   renderPlanner(type);
   renderSummaryTbl(type);
@@ -1158,12 +2089,17 @@ async function renderSavedPlans(forceRefresh){
   var listEl=document.getElementById('saved-plans-list');
   if(!listEl)return;
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
-    setSavedPlansMessage(listEl,'Configure Supabase in supabase-config.js to browse saved plans.');
+    setSavedPlansMessage(listEl,'Configure Supabase in .env.local or supabase-config.js to browse saved plans.');
     renderSavedPlanStats([],[]);
     return;
   }
   if(!currentUser){
     setSavedPlansMessage(listEl,'Sign in to browse saved plans.');
+    renderSavedPlanStats([],[]);
+    return;
+  }
+  if(!hasCurrentUserFullAccess()){
+    setSavedPlansMessage(listEl,getCurrentUserAccessMessage('browse saved plans'));
     renderSavedPlanStats([],[]);
     return;
   }
@@ -1200,11 +2136,15 @@ async function renderReviewQueue(forceRefresh){
   var listEl=document.getElementById('review-queue-list');
   if(!listEl)return;
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
-    setSavedPlansMessage(listEl,'Configure Supabase in supabase-config.js to load the review queue.');
+    setSavedPlansMessage(listEl,'Configure Supabase in .env.local or supabase-config.js to load the review queue.');
     return;
   }
   if(!currentUser){
     setSavedPlansMessage(listEl,'Sign in to review submitted child plans.');
+    return;
+  }
+  if(!hasCurrentUserFullAccess()){
+    setSavedPlansMessage(listEl,getCurrentUserAccessMessage('review submitted child plans'));
     return;
   }
   try{
@@ -1228,6 +2168,10 @@ async function refreshReviewQueue(forceRefresh){
 async function submitPlanReview(plan, nextStatus){
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.reviewPlanInSupabase)){
     showToast('Supabase helpers are unavailable.');
+    return;
+  }
+  if(!hasCurrentUserFullAccess()){
+    showToast(getCurrentUserAccessMessage('review submitted plans'));
     return;
   }
   var reviewNote='';
@@ -1254,6 +2198,10 @@ async function submitPlanReview(plan, nextStatus){
 async function duplicateSavedPlan(planId, roleType){
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.loadPlanFromSupabase&&window.GutguardPlanApi.savePlanToSupabase)){
     showToast('Supabase helpers are unavailable.');
+    return;
+  }
+  if(!hasCurrentUserFullAccess()){
+    showToast(getCurrentUserAccessMessage('duplicate saved plans'));
     return;
   }
   try{
@@ -2041,6 +2989,9 @@ async function savePlan(mode){
   if(!curType)return;
   mode=mode||'submitted';
   try{
+    if(currentUser&&!hasCurrentUserFullAccess()){
+      throw new Error(getCurrentUserAccessMessage(mode==='draft'?'save drafts':'submit plans'));
+    }
     updateSaveStatus(curType,{message:(mode==='draft'?'Saving draft':'Submitting plan')+' to Supabase...',tone:'n-info'});
     if(PARENT_ROLE[curType]){
       await ensureValidParentSelectionBeforeSave(curType, mode);
@@ -2048,6 +2999,13 @@ async function savePlan(mode){
     var plan=window.GutguardPlanModel.collectPlanData(curType,planMeta[curType]);
     plan.status=mode==='draft'?'draft':'submitted';
     window.GutguardPlanModel.validatePlanData(plan,{mode:mode});
+    if(mode!=='draft'){
+      var warnings=getPlannerWarnings(curType);
+      if(warnings.length&&!confirm('Submit with these warnings?\n\n- '+warnings.join('\n- '))){
+        updateSaveStatus(curType,{message:'Submission paused. Review the planner warnings before submitting.',tone:'n-warn'});
+        return;
+      }
+    }
     var saved=await window.GutguardPlanApi.savePlanToSupabase(plan);
     planMeta[curType]={planId:saved.id,status:saved.status||plan.status,lastSavedAt:saved.updated_at||saved.created_at||new Date().toISOString()};
     if(window.GutguardPlanModel&&window.GutguardPlanModel.rememberPlanRef)window.GutguardPlanModel.rememberPlanRef(curType,saved,getDraftScopeId());
@@ -2067,6 +3025,7 @@ async function savePlan(mode){
     var friendlyError=getFriendlySaveError(err);
     updateSaveStatus(curType,{message:'Save failed. '+friendlyError,tone:'n-danger'});
     showToast(friendlyError);
+    reportClientIssue('savePlan', err, {mode:mode, role:curType});
   }
 }
 bootstrapAuthState();
@@ -2088,8 +3047,14 @@ if(window.GutguardSupabase&&window.GutguardSupabase.onAuthStateChange){
   window.GutguardSupabase.onAuthStateChange(async function(_event, session){
     currentUser=session&&session.user?session.user:null;
     resetSavedPlansCache();
+    if(currentUser){
+      await fetchCurrentUserProfile(true).catch(function(){ currentUserProfile=null; });
+    }else{
+      currentUserProfile=null;
+    }
     renderAuthState();
     refreshSavedPlans(true);
+    refreshHomeOperations(true);
     if(curType){
       updateSaveStatus(curType);
       await populateParentOptions(curType);
@@ -2098,4 +3063,18 @@ if(window.GutguardSupabase&&window.GutguardSupabase.onAuthStateChange){
     }
   });
 }
+window.addEventListener('error',function(event){
+  reportClientIssue('window.error', event&&event.error?event.error:event&&event.message?event.message:'Unhandled error');
+});
+window.addEventListener('unhandledrejection',function(event){
+  reportClientIssue('window.unhandledrejection', event&&event.reason?event.reason:'Unhandled rejection');
+});
+window.GutguardDiagnostics={
+  list:function(){
+    return getDiagnosticStore().slice();
+  },
+  clear:function(){
+    getDiagnosticStore().length=0;
+  }
+};
 function showToast(msg){var t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2500);}
