@@ -1,7 +1,7 @@
 (function () {
   var fallbackConfig = {
-    supabaseUrl: "https://nhifsoxmiqosuaiiprhd.supabase.co",
-    supabaseAnonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5oaWZzb3htaXFvc3VhaWlwcmhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4OTkwNDEsImV4cCI6MjA5MTQ3NTA0MX0.fpvxGs0U-qzeM26FWJDdQYAAKIq2PGnHQIZ1Vrq3voE"
+    supabaseUrl: "YOUR_SUPABASE_URL",
+    supabaseAnonKey: "YOUR_SUPABASE_ANON_KEY"
   };
   var runtimeConfig = window.__GUTGUARD_ENV || {};
   var SUPABASE_URL = runtimeConfig.supabaseUrl || fallbackConfig.supabaseUrl;

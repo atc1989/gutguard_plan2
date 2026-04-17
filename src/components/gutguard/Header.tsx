@@ -1,12 +1,11 @@
 "use client";
 
-declare global {
-  interface Window {
-    goHome?: () => void;
-  }
-}
+import { useGutguardActions } from "./GutguardActionContext";
+import { gutguardSiteConfig } from "@/lib/gutguard-site-config";
 
 export default function Header() {
+  const { goHome } = useGutguardActions();
+
   return (
     <>
       <header className="hdr">
@@ -22,12 +21,13 @@ export default function Header() {
               className="back-btn"
               id="backBtn"
               type="button"
-              onClick={() => window.goHome?.()}
+              onClick={goHome}
             >
               &#8592; Home
             </button>
             <div className="ref">
-              Ref. OPS-032326-003 <div className="pill pill-r">Deadline: Apr 1, 2026</div>
+              {gutguardSiteConfig.referenceCode}{" "}
+              <div className="pill pill-r">Deadline: {gutguardSiteConfig.deadlineLabel}</div>
             </div>
           </div>
         </div>
@@ -35,16 +35,16 @@ export default function Header() {
       <div className="memo-strip">
         <div className="memo-strip-inner">
           <div className="mi">
-            TO: <strong>All Members, 01s, Leaders, Depots &amp; City Stockists</strong>
+            TO: <strong>{gutguardSiteConfig.memoTo}</strong>
           </div>
           <div className="mi">
-            FROM: <strong>Office of Chairman &amp; CEO</strong>
+            FROM: <strong>{gutguardSiteConfig.memoFrom}</strong>
           </div>
           <div className="mi">
-            DATE: <strong>March 23, 2026</strong>
+            DATE: <strong>{gutguardSiteConfig.memoDate}</strong>
           </div>
           <div className="mi">
-            EXECUTION: <strong>April 5 - July 5, 2026</strong>
+            EXECUTION: <strong>{gutguardSiteConfig.executionWindow}</strong>
           </div>
         </div>
       </div>

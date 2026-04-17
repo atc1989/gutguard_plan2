@@ -1,7 +1,9 @@
 "use client";
 
-import type { FormEvent } from "react";
-import { useState } from "react";
+import type { ChangeEvent, FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useGutguardActions } from "./GutguardActionContext";
+import { gutguardSiteConfig } from "@/lib/gutguard-site-config";
 
 type RoleType = "member" | "leader" | "squad" | "platoon" | "o1";
 
@@ -24,23 +26,18 @@ type RoleCard = {
   tileClass: string;
 };
 
-declare global {
-  interface Window {
-    startForm?: (type: RoleType) => void;
-    handleAuthSubmit?: (event?: Event) => void;
-    handleSignUp?: () => void;
-    handleSignOut?: () => void;
-    saveMyProfile?: () => void;
-    refreshSavedPlans?: (forceRefresh?: boolean) => void;
-    refreshReviewQueue?: (forceRefresh?: boolean) => void;
-    refreshDashboard?: (forceRefresh?: boolean) => void;
-    refreshActivityFeed?: (forceRefresh?: boolean) => void;
-    refreshAdminDirectory?: (forceRefresh?: boolean) => void;
-    refreshUserDirectory?: (forceRefresh?: boolean) => void;
-    bulkApprovePendingProfiles?: () => void;
-    bulkRejectPendingProfiles?: () => void;
-  }
-}
+type SignInFormState = {
+  email: string;
+  password: string;
+};
+
+type SignUpFormState = {
+  displayName: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  roleType: RoleType;
+};
 
 const featureCards: FeatureCard[] = [
   {
@@ -173,7 +170,7 @@ const roleCards: RoleCard[] = [
     icon: "\u{1F3E2}",
     name: "01 / Product Center",
     description:
-      "Final command dashboard for validating all field plans before the April 1, 2026 submission deadline.",
+      gutguardSiteConfig.o1DeadlineCopy,
     items: [
       "See the highest-level consolidated target and event commitment view.",
       "Confirm that every lower level is represented in the submitted chain.",
@@ -187,24 +184,192 @@ const roleCards: RoleCard[] = [
 ];
 
 export default function HomeScreen() {
+  const {
+    bulkApprovePendingProfiles,
+    bulkRejectPendingProfiles,
+    refreshActivityFeed,
+    refreshAdminDirectory,
+    refreshDashboard,
+    refreshReviewQueue,
+    refreshSavedPlans,
+    refreshUserDirectory,
+    saveMyProfile,
+    signOut,
+    signUp,
+    startForm,
+    submitAuth
+  } = useGutguardActions();
   const [activePanel, setActivePanel] = useState<"overview" | "workspace" | "operations">(
     "overview"
   );
+  const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [authNotice, setAuthNotice] = useState("");
+  const [signInForm, setSignInForm] = useState<SignInFormState>({
+    email: "",
+    password: ""
+  });
+  const [signUpForm, setSignUpForm] = useState<SignUpFormState>({
+    displayName: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+    roleType: "member"
+  });
+  const refreshTimersRef = useRef<Record<string, ReturnType<typeof setTimeout> | undefined>>({});
 
-  function handleStartForm(role: RoleType) {
-    window.startForm?.(role);
+  useEffect(() => {
+    return () => {
+      Object.values(refreshTimersRef.current).forEach((timer) => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      });
+    };
+  }, []);
+
+  function syncLegacyAuthFields(values: {
+    email: string;
+    password: string;
+    displayName?: string;
+    roleType?: RoleType;
+  }) {
+    const fieldValues = {
+      "auth-email": values.email,
+      "auth-password": values.password,
+      "auth-display-name": values.displayName ?? "",
+      "auth-role-type": values.roleType ?? "member"
+    } as const;
+
+    Object.entries(fieldValues).forEach(([id, value]) => {
+      const element = document.getElementById(id) as HTMLInputElement | null;
+
+      if (element) {
+        element.value = value;
+      }
+    });
   }
 
-  function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
-    window.handleAuthSubmit?.(event.nativeEvent);
+  function handleAuthModeChange(nextMode: "sign-in" | "sign-up") {
+    setAuthMode(nextMode);
+    setAuthNotice("");
   }
 
-  function refreshSavedPlans(forceRefresh?: boolean) {
-    window.refreshSavedPlans?.(forceRefresh);
+  function handleSignInChange(field: keyof SignInFormState, value: string) {
+    setAuthNotice("");
+    setSignInForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
+  function handleSignUpChange(
+    field: keyof SignUpFormState,
+    value: SignUpFormState[keyof SignUpFormState]
+  ) {
+    setAuthNotice("");
+    setSignUpForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
+  function handleSignInSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const email = signInForm.email.trim();
+    const password = signInForm.password;
+
+    if (!email || !password) {
+      setAuthNotice("Enter your email and password to sign in.");
+      return;
+    }
+
+    syncLegacyAuthFields({
+      email,
+      password
+    });
+    setAuthNotice("");
+    submitAuth();
+  }
+
+  function handleSignUpSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const displayName = signUpForm.displayName.trim();
+    const email = signUpForm.email.trim();
+    const password = signUpForm.password;
+
+    if (!displayName || !email || !password) {
+      setAuthNotice("Display name, email, and password are required to create an account.");
+      return;
+    }
+
+    if (password.length < 6) {
+      setAuthNotice("Use a password with at least 6 characters.");
+      return;
+    }
+
+    if (password !== signUpForm.confirmPassword) {
+      setAuthNotice("Password confirmation does not match.");
+      return;
+    }
+
+    syncLegacyAuthFields({
+      email,
+      password,
+      displayName,
+      roleType: signUpForm.roleType
+    });
+    setAuthNotice("");
+    signUp();
   }
 
   function getPanelClass(panel: "overview" | "workspace" | "operations") {
     return `home-panel ${activePanel === panel ? "active" : ""}`;
+  }
+
+  function scheduleRefresh(
+    key: string,
+    refreshAction: (forceRefresh?: boolean) => void,
+    options?: { delay?: number; forceRefresh?: boolean }
+  ) {
+    const delay = options?.delay ?? 220;
+    const forceRefresh = options?.forceRefresh ?? false;
+    const existingTimer = refreshTimersRef.current[key];
+
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    refreshTimersRef.current[key] = setTimeout(() => {
+      refreshAction(forceRefresh);
+      delete refreshTimersRef.current[key];
+    }, delay);
+  }
+
+  function getHomeTabProps(panel: "overview" | "workspace" | "operations") {
+    const isActive = activePanel === panel;
+
+    return {
+      id: `home-tab-${panel}`,
+      role: "tab" as const,
+      "aria-selected": isActive,
+      "aria-controls": `home-panel-${panel}`,
+      tabIndex: isActive ? 0 : -1
+    };
+  }
+
+  function getHomePanelProps(panel: "overview" | "workspace" | "operations") {
+    const isActive = activePanel === panel;
+
+    return {
+      id: `home-panel-${panel}`,
+      role: "tabpanel" as const,
+      "aria-labelledby": `home-tab-${panel}`,
+      "aria-hidden": !isActive,
+      hidden: !isActive,
+      tabIndex: 0
+    };
   }
 
   return (
@@ -236,49 +401,216 @@ export default function HomeScreen() {
         <div
           style={{ marginTop: ".75rem", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
         >
-          <form
+          <div
             id="auth-credentials"
-            style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
-            onSubmit={handleAuthSubmit}
+            className="auth-shell"
+            style={{ display: "flex", flexDirection: "column", width: "100%", gap: 14 }}
           >
-            <input
-              type="email"
-              id="auth-email"
-              placeholder="Email address"
-              aria-label="Email address"
-              autoComplete="email"
-            />
-            <input
-              type="password"
-              id="auth-password"
-              placeholder="Password"
-              aria-label="Password"
-              autoComplete="current-password"
-            />
-            <input
-              type="text"
-              id="auth-display-name"
-              placeholder="Display name for sign up"
-              aria-label="Display name for sign up"
-              autoComplete="name"
-            />
-            <select id="auth-role-type" aria-label="Role for sign up" defaultValue="member">
-              <option value="member">Member</option>
-              <option value="leader">Team Leader</option>
-              <option value="squad">Squad Leader</option>
-              <option value="platoon">Platoon Leader</option>
-              <option value="o1">01 / Product Center</option>
-            </select>
-            <button className="btn btp" type="submit">
-              Sign In
-            </button>
-            <button className="btn bto" type="button" onClick={() => window.handleSignUp?.()}>
-              Sign Up
-            </button>
-            <div className="saved-plan-stat-meta" style={{ flexBasis: "100%" }}>
-              Display name and role are used only when creating a new account.
+            <div className="auth-mode-switch" aria-label="Authentication mode">
+              <button
+                type="button"
+                className={`auth-mode-btn ${authMode === "sign-in" ? "active" : ""}`}
+                onClick={() => handleAuthModeChange("sign-in")}
+                aria-pressed={authMode === "sign-in"}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                className={`auth-mode-btn ${authMode === "sign-up" ? "active" : ""}`}
+                onClick={() => handleAuthModeChange("sign-up")}
+                aria-pressed={authMode === "sign-up"}
+              >
+                Create Account
+              </button>
             </div>
-          </form>
+
+            <div className="auth-form-shell" aria-hidden="true">
+              <input type="hidden" id="auth-email" value="" readOnly />
+              <input type="hidden" id="auth-password" value="" readOnly />
+              <input type="hidden" id="auth-display-name" value="" readOnly />
+              <input type="hidden" id="auth-role-type" value="member" readOnly />
+            </div>
+
+            {authMode === "sign-in" ? (
+              <form className="auth-card-grid" onSubmit={handleSignInSubmit}>
+                <div className="auth-card">
+                  <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
+                    Sign In
+                  </div>
+                  <div className="saved-plans-copy" style={{ marginBottom: ".95rem" }}>
+                    Use your approved account to reopen plans, save drafts, and access your role
+                    workspace.
+                  </div>
+                  <div className="auth-form-grid">
+                    <label className="auth-field" htmlFor="sign-in-email">
+                      <span>Email Address</span>
+                      <input
+                        id="sign-in-email"
+                        type="email"
+                        placeholder="you@example.com"
+                        autoComplete="email"
+                        value={signInForm.email}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          handleSignInChange("email", event.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="auth-field" htmlFor="sign-in-password">
+                      <span>Password</span>
+                      <input
+                        id="sign-in-password"
+                        type="password"
+                        placeholder="Enter your password"
+                        autoComplete="current-password"
+                        value={signInForm.password}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          handleSignInChange("password", event.target.value)
+                        }
+                      />
+                    </label>
+                  </div>
+                  <div className="auth-action-row">
+                    <button className="btn btp" type="submit">
+                      Sign In
+                    </button>
+                    <button
+                      className="btn bto"
+                      type="button"
+                      onClick={() => handleAuthModeChange("sign-up")}
+                    >
+                      Need an Account?
+                    </button>
+                  </div>
+                </div>
+              </form>
+            ) : (
+              <form className="auth-card-grid" onSubmit={handleSignUpSubmit}>
+                <div className="auth-card">
+                  <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
+                    Create Account
+                  </div>
+                  <div className="saved-plans-copy" style={{ marginBottom: ".95rem" }}>
+                    New users enter their display name and role once, then verify their email and
+                    wait for admin approval before protected access unlocks.
+                  </div>
+                  <div className="auth-form-grid">
+                    <label className="auth-field" htmlFor="sign-up-display-name">
+                      <span>Display Name</span>
+                      <input
+                        id="sign-up-display-name"
+                        type="text"
+                        placeholder="Your full name"
+                        autoComplete="name"
+                        value={signUpForm.displayName}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          handleSignUpChange("displayName", event.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="auth-field" htmlFor="sign-up-role">
+                      <span>Role</span>
+                      <select
+                        id="sign-up-role"
+                        value={signUpForm.roleType}
+                        onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                          handleSignUpChange("roleType", event.target.value as RoleType)
+                        }
+                      >
+                        <option value="member">Member</option>
+                        <option value="leader">Team Leader</option>
+                        <option value="squad">Squad Leader</option>
+                        <option value="platoon">Platoon Leader</option>
+                        <option value="o1">01 / Product Center</option>
+                      </select>
+                    </label>
+                    <label className="auth-field" htmlFor="sign-up-email">
+                      <span>Email Address</span>
+                      <input
+                        id="sign-up-email"
+                        type="email"
+                        placeholder="you@example.com"
+                        autoComplete="email"
+                        value={signUpForm.email}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          handleSignUpChange("email", event.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="auth-field" htmlFor="sign-up-password">
+                      <span>Password</span>
+                      <input
+                        id="sign-up-password"
+                        type="password"
+                        placeholder="At least 6 characters"
+                        autoComplete="new-password"
+                        value={signUpForm.password}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          handleSignUpChange("password", event.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="auth-field" htmlFor="sign-up-confirm-password">
+                      <span>Confirm Password</span>
+                      <input
+                        id="sign-up-confirm-password"
+                        type="password"
+                        placeholder="Re-enter your password"
+                        autoComplete="new-password"
+                        value={signUpForm.confirmPassword}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          handleSignUpChange("confirmPassword", event.target.value)
+                        }
+                      />
+                    </label>
+                  </div>
+                  <div className="auth-action-row">
+                    <button className="btn btp" type="submit">
+                      Create Account
+                    </button>
+                    <button
+                      className="btn bto"
+                      type="button"
+                      onClick={() => handleAuthModeChange("sign-in")}
+                    >
+                      Back to Sign In
+                    </button>
+                  </div>
+                  <div className="saved-plan-stat-meta">
+                    Role selection only applies during signup. Role changes after approval should be
+                    handled by an admin.
+                  </div>
+                </div>
+              </form>
+            )}
+
+            {authNotice ? <div className="auth-inline-note">{authNotice}</div> : null}
+
+            <div className="auth-guide-grid">
+              <div className="auth-guide-card">
+                <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
+                  New User Flow
+                </div>
+                <ol className="auth-guide-list">
+                  <li>Create your account once with the correct role.</li>
+                  <li>Verify the email link sent by Supabase Auth.</li>
+                  <li>Sign in and wait for an approved admin to unlock full access.</li>
+                  <li>After approval, reopen the planner and continue from the same account.</li>
+                </ol>
+              </div>
+              <div className="auth-guide-card">
+                <div className="sec-lbl" style={{ marginBottom: ".45rem" }}>
+                  Admin Approval Flow
+                </div>
+                <ol className="auth-guide-list">
+                  <li>Bootstrap the first approved admin once in Supabase.</li>
+                  <li>That admin signs in and opens Operations -&gt; Admin Directory.</li>
+                  <li>Filter Approval to Pending, then approve visible accounts or update one user at a time.</li>
+                  <li>After the first admin is active, normal approvals no longer need SQL.</li>
+                </ol>
+              </div>
+            </div>
+          </div>
           <div
             id="auth-signed-in"
             style={{ display: "none", alignItems: "center", gap: 10 }}
@@ -294,7 +626,7 @@ export default function HomeScreen() {
               className="btn bto"
               id="sign-out-btn"
               type="button"
-              onClick={() => window.handleSignOut?.()}
+              onClick={signOut}
             >
               Sign Out
             </button>
@@ -317,7 +649,7 @@ export default function HomeScreen() {
             </div>
           </div>
           <div className="saved-plans-tools">
-            <button className="btn bto" type="button" onClick={() => window.refreshDashboard?.(true)}>
+            <button className="btn bto" type="button" onClick={() => refreshDashboard(true)}>
               Refresh Dashboard
             </button>
           </div>
@@ -358,7 +690,7 @@ export default function HomeScreen() {
             </div>
           </div>
           <div className="saved-plans-tools">
-            <button className="btn btp" type="button" onClick={() => window.saveMyProfile?.()}>
+            <button className="btn btp" type="button" onClick={saveMyProfile}>
               Save Profile
             </button>
           </div>
@@ -388,6 +720,7 @@ export default function HomeScreen() {
           type="button"
           className={`home-switcher-btn ${activePanel === "overview" ? "active" : ""}`}
           onClick={() => setActivePanel("overview")}
+          {...getHomeTabProps("overview")}
         >
           Overview
         </button>
@@ -395,6 +728,7 @@ export default function HomeScreen() {
           type="button"
           className={`home-switcher-btn ${activePanel === "workspace" ? "active" : ""}`}
           onClick={() => setActivePanel("workspace")}
+          {...getHomeTabProps("workspace")}
         >
           Workspace
         </button>
@@ -402,12 +736,13 @@ export default function HomeScreen() {
           type="button"
           className={`home-switcher-btn ${activePanel === "operations" ? "active" : ""}`}
           onClick={() => setActivePanel("operations")}
+          {...getHomeTabProps("operations")}
         >
           Operations
         </button>
       </div>
 
-      <div className={getPanelClass("overview")} aria-hidden={activePanel !== "overview"}>
+      <div className={getPanelClass("overview")} {...getHomePanelProps("overview")}>
         <div className="memo-box">
           <div className="mb-lbl">How It Works</div>
           <strong>1.</strong> Every role starts with a 90-day target, and the system converts it
@@ -437,12 +772,14 @@ export default function HomeScreen() {
           {chainRoles.map((item, index) => (
             <span key={item.role} style={{ display: "contents" }}>
               <div className="fc-node">
-                <span
+                <button
+                  type="button"
                   className={`fc-badge ${item.className}`}
-                  onClick={() => handleStartForm(item.role)}
+                  onClick={() => startForm(item.role)}
+                  aria-label={`Open ${item.label} workspace`}
                 >
                   {item.icon} {item.label}
-                </span>
+                </button>
               </div>
               {index < chainRoles.length - 1 ? <span className="fc-arrow">-&gt;</span> : null}
             </span>
@@ -461,10 +798,11 @@ export default function HomeScreen() {
         <div className="sec-lbl">Open a Plan</div>
         <div className="type-grid">
           {roleCards.map((card) => (
-            <div
+            <button
+              type="button"
               key={card.role}
               className={`tc ${card.tileClass}`}
-              onClick={() => handleStartForm(card.role)}
+              onClick={() => startForm(card.role)}
             >
               <span className="t-icon">{card.icon}</span>
               <div className="t-name">{card.name}</div>
@@ -478,12 +816,12 @@ export default function HomeScreen() {
                 <span className={`t-badge ${card.badgeClass}`}>{card.badgeLabel}</span>
                 <span className="t-cta">{card.cta}</span>
               </div>
-            </div>
+            </button>
           ))}
         </div>
       </div>
 
-      <div className={getPanelClass("workspace")} aria-hidden={activePanel !== "workspace"}>
+      <div className={getPanelClass("workspace")} {...getHomePanelProps("workspace")}>
         <div className="saved-plans-wrap">
           <div className="saved-plans-head">
             <div>
@@ -501,12 +839,12 @@ export default function HomeScreen() {
                 id="saved-plans-search"
                 placeholder="Search name, ID, or status"
                 aria-label="Search saved plans by name, ID, or status"
-                onInput={() => refreshSavedPlans()}
+                onInput={() => scheduleRefresh("saved-plans-search", refreshSavedPlans, { delay: 280 })}
               />
               <select
                 id="saved-plans-filter"
                 aria-label="Filter saved plans by role"
-                onChange={() => refreshSavedPlans()}
+                onChange={() => scheduleRefresh("saved-plans-filter", refreshSavedPlans)}
               >
                 <option value="">All Roles</option>
                 <option value="member">Member</option>
@@ -518,7 +856,7 @@ export default function HomeScreen() {
               <select
                 id="saved-plans-status"
                 aria-label="Filter saved plans by status"
-                onChange={() => refreshSavedPlans()}
+                onChange={() => scheduleRefresh("saved-plans-status", refreshSavedPlans)}
               >
                 <option value="">All Statuses</option>
                 <option value="submitted">Submitted</option>
@@ -571,7 +909,7 @@ export default function HomeScreen() {
               </div>
             </div>
             <div className="saved-plans-tools">
-              <button className="btn bto" type="button" onClick={() => window.refreshReviewQueue?.(true)}>
+              <button className="btn bto" type="button" onClick={() => refreshReviewQueue(true)}>
                 Refresh Queue
               </button>
             </div>
@@ -584,7 +922,7 @@ export default function HomeScreen() {
         </div>
       </div>
 
-      <div className={getPanelClass("operations")} aria-hidden={activePanel !== "operations"}>
+      <div className={getPanelClass("operations")} {...getHomePanelProps("operations")}>
         <div className="saved-plans-wrap">
           <div className="saved-plans-head">
             <div>
@@ -602,12 +940,14 @@ export default function HomeScreen() {
                 id="user-directory-search"
                 placeholder="Search user or email"
                 aria-label="Search approved users"
-                onInput={() => window.refreshUserDirectory?.()}
+                onInput={() =>
+                  scheduleRefresh("user-directory-search", refreshUserDirectory, { delay: 280 })
+                }
               />
               <select
                 id="user-directory-role"
                 aria-label="Filter approved users by role"
-                onChange={() => window.refreshUserDirectory?.()}
+                onChange={() => scheduleRefresh("user-directory-role", refreshUserDirectory)}
               >
                 <option value="">All Roles</option>
                 <option value="member">Member</option>
@@ -616,7 +956,7 @@ export default function HomeScreen() {
                 <option value="platoon">Platoon Leader</option>
                 <option value="o1">01 / Product Center</option>
               </select>
-              <button className="btn bto" type="button" onClick={() => window.refreshUserDirectory?.(true)}>
+              <button className="btn bto" type="button" onClick={() => refreshUserDirectory(true)}>
                 Refresh Directory
               </button>
             </div>
@@ -644,12 +984,14 @@ export default function HomeScreen() {
                 id="activity-feed-search"
                 placeholder="Search activity"
                 aria-label="Search recent activity"
-                onInput={() => window.refreshActivityFeed?.()}
+                onInput={() =>
+                  scheduleRefresh("activity-feed-search", refreshActivityFeed, { delay: 280 })
+                }
               />
               <select
                 id="activity-feed-action"
                 aria-label="Filter recent activity by action"
-                onChange={() => window.refreshActivityFeed?.()}
+                onChange={() => scheduleRefresh("activity-feed-action", refreshActivityFeed)}
               >
                 <option value="">All Actions</option>
                 <option value="created">Plan Created</option>
@@ -666,7 +1008,7 @@ export default function HomeScreen() {
               <select
                 id="activity-feed-role"
                 aria-label="Filter recent activity by role"
-                onChange={() => window.refreshActivityFeed?.()}
+                onChange={() => scheduleRefresh("activity-feed-role", refreshActivityFeed)}
               >
                 <option value="">All Roles</option>
                 <option value="member">Member</option>
@@ -675,7 +1017,7 @@ export default function HomeScreen() {
                 <option value="platoon">Platoon Leader</option>
                 <option value="o1">01 / Product Center</option>
               </select>
-              <button className="btn bto" type="button" onClick={() => window.refreshActivityFeed?.(true)}>
+              <button className="btn bto" type="button" onClick={() => refreshActivityFeed(true)}>
                 Refresh Activity
               </button>
             </div>
@@ -694,8 +1036,9 @@ export default function HomeScreen() {
                 Admin Directory
               </div>
               <div className="saved-plans-copy">
-                Manage account names, roles, active status, and onboarding notes for the whole
-                hierarchy directory.
+                Manage account names, roles, active status, onboarding notes, and audit context for
+                the whole hierarchy directory. Pending signups can be approved here after they
+                verify email.
               </div>
             </div>
             <div className="saved-plans-tools">
@@ -704,12 +1047,14 @@ export default function HomeScreen() {
                 id="admin-profiles-search"
                 placeholder="Search email or name"
                 aria-label="Search user profiles by email or name"
-                onInput={() => window.refreshAdminDirectory?.()}
+                onInput={() =>
+                  scheduleRefresh("admin-profiles-search", refreshAdminDirectory, { delay: 280 })
+                }
               />
               <select
                 id="admin-profiles-role"
                 aria-label="Filter admin directory by role"
-                onChange={() => window.refreshAdminDirectory?.()}
+                onChange={() => scheduleRefresh("admin-profiles-role", refreshAdminDirectory)}
               >
                 <option value="">All Roles</option>
                 <option value="member">Member</option>
@@ -721,7 +1066,9 @@ export default function HomeScreen() {
               <select
                 id="admin-profiles-approval"
                 aria-label="Filter admin directory by approval"
-                onChange={() => window.refreshAdminDirectory?.()}
+                onChange={() =>
+                  scheduleRefresh("admin-profiles-approval", refreshAdminDirectory)
+                }
               >
                 <option value="">All Approval States</option>
                 <option value="pending">Pending</option>
@@ -731,7 +1078,7 @@ export default function HomeScreen() {
               <select
                 id="admin-profiles-admin"
                 aria-label="Filter admin directory by admin access"
-                onChange={() => window.refreshAdminDirectory?.()}
+                onChange={() => scheduleRefresh("admin-profiles-admin", refreshAdminDirectory)}
               >
                 <option value="">All Access</option>
                 <option value="admin">Admin</option>
@@ -740,7 +1087,7 @@ export default function HomeScreen() {
               <select
                 id="admin-profiles-sort"
                 aria-label="Sort admin directory"
-                onChange={() => window.refreshAdminDirectory?.()}
+                onChange={() => scheduleRefresh("admin-profiles-sort", refreshAdminDirectory)}
                 defaultValue="name"
               >
                 <option value="name">Sort by Name</option>
@@ -748,13 +1095,13 @@ export default function HomeScreen() {
                 <option value="latest-plan">Latest Plan Activity</option>
                 <option value="pending-first">Pending First</option>
               </select>
-              <button className="btn bto" type="button" onClick={() => window.bulkApprovePendingProfiles?.()}>
+              <button className="btn bto" type="button" onClick={bulkApprovePendingProfiles}>
                 Approve Visible Pending
               </button>
-              <button className="btn btn-danger-lite" type="button" onClick={() => window.bulkRejectPendingProfiles?.()}>
+              <button className="btn btn-danger-lite" type="button" onClick={bulkRejectPendingProfiles}>
                 Reject Visible Pending
               </button>
-              <button className="btn bto" type="button" onClick={() => window.refreshAdminDirectory?.(true)}>
+              <button className="btn bto" type="button" onClick={() => refreshAdminDirectory(true)}>
                 Refresh Directory
               </button>
             </div>

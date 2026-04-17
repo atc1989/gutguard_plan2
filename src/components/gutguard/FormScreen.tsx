@@ -1,7 +1,7 @@
-import { getLegacyFormMarkup } from "@/lib/gutguard-utils";
-
-const formMarkup = getLegacyFormMarkup();
-
 export default function FormScreen() {
-  return <div suppressHydrationWarning dangerouslySetInnerHTML={{ __html: formMarkup }} />;
+  return (
+    <div id="sc-form" className="screen">
+      <div className="fw" id="forminner" />
+    </div>
+  );
 }

@@ -474,8 +474,6 @@ begin
     nullif(trim(new.raw_user_meta_data->>'displayName'), ''),
     nullif(trim(new.raw_user_meta_data->'data'->>'display_name'), ''),
     nullif(trim(new.raw_user_meta_data->'data'->>'displayName'), ''),
-    nullif(trim(new.user_metadata->>'display_name'), ''),
-    nullif(trim(new.user_metadata->>'displayName'), ''),
     nullif(split_part(coalesce(new.email, ''), '@', 1), ''),
     'New User'
   );
@@ -484,8 +482,6 @@ begin
     nullif(trim(new.raw_user_meta_data->>'roleType'), ''),
     nullif(trim(new.raw_user_meta_data->'data'->>'role_type'), ''),
     nullif(trim(new.raw_user_meta_data->'data'->>'roleType'), ''),
-    nullif(trim(new.user_metadata->>'role_type'), ''),
-    nullif(trim(new.user_metadata->>'roleType'), ''),
     'member'
   );
 
@@ -882,6 +878,9 @@ returns table (
   approval_status text,
   notes text,
   approved_at timestamptz,
+  approved_by uuid,
+  approved_by_email text,
+  approved_by_display_name text,
   created_at timestamptz,
   updated_at timestamptz,
   latest_plan_id uuid,
@@ -903,12 +902,19 @@ as $$
     profile.approval_status,
     profile.notes,
     profile.approved_at,
+    profile.approved_by,
+    approver_user.email as approved_by_email,
+    approver_profile.display_name as approved_by_display_name,
     profile.created_at,
     profile.updated_at,
     latest_plan.id as latest_plan_id,
     latest_plan.status as latest_plan_status,
     latest_plan.updated_at as latest_plan_updated_at
   from public.user_profiles profile
+  left join auth.users approver_user
+    on approver_user.id = profile.approved_by
+  left join public.user_profiles approver_profile
+    on approver_profile.user_id = profile.approved_by
   left join lateral (
     select p.id, p.status, p.updated_at
     from public.plans p
@@ -985,6 +991,7 @@ declare
   next_is_admin boolean;
   next_is_active boolean;
   next_approval_status text;
+  change_reason text;
 begin
   if auth.uid() is null or not public.is_admin_user() then
     raise exception 'Admin access is required.';
@@ -1022,6 +1029,7 @@ begin
     (select approval_status from public.user_profiles where user_id = target_user_id),
     'pending'
   );
+  change_reason := nullif(trim(profile_payload->>'change_reason'), '');
 
   if next_role_type not in ('member', 'leader', 'squad', 'platoon', 'o1') then
     raise exception 'Unsupported role type.';
@@ -1093,7 +1101,7 @@ begin
       next_profile.display_name,
       next_profile.role_type,
       'profile_updated',
-      'Display name was changed by an admin.',
+      'Display name was changed by an admin.' || case when change_reason is not null then ' Reason: ' || change_reason else '' end,
       auth.uid()
     );
   end if;
@@ -1105,7 +1113,7 @@ begin
       next_profile.display_name,
       next_profile.role_type,
       'role_changed',
-      'Role changed from ' || coalesce(previous_profile.role_type, '(none)') || ' to ' || coalesce(next_profile.role_type, '(none)') || '.',
+      'Role changed from ' || coalesce(previous_profile.role_type, '(none)') || ' to ' || coalesce(next_profile.role_type, '(none)') || '.' || case when change_reason is not null then ' Reason: ' || change_reason else '' end,
       auth.uid()
     );
   end if;
@@ -1117,7 +1125,7 @@ begin
       next_profile.display_name,
       next_profile.role_type,
       'approval_changed',
-      'Approval changed from ' || coalesce(previous_profile.approval_status, '(none)') || ' to ' || coalesce(next_profile.approval_status, '(none)') || '.',
+      'Approval changed from ' || coalesce(previous_profile.approval_status, '(none)') || ' to ' || coalesce(next_profile.approval_status, '(none)') || '.' || case when change_reason is not null then ' Reason: ' || change_reason else '' end,
       auth.uid()
     );
   end if;
@@ -1129,7 +1137,7 @@ begin
       next_profile.display_name,
       next_profile.role_type,
       'activation_changed',
-      case when next_profile.is_active then 'Account was reactivated.' else 'Account was deactivated.' end,
+      (case when next_profile.is_active then 'Account was reactivated.' else 'Account was deactivated.' end) || case when change_reason is not null then ' Reason: ' || change_reason else '' end,
       auth.uid()
     );
   end if;
@@ -1141,7 +1149,7 @@ begin
       next_profile.display_name,
       next_profile.role_type,
       'admin_changed',
-      case when next_profile.is_admin then 'Admin access granted.' else 'Admin access removed.' end,
+      (case when next_profile.is_admin then 'Admin access granted.' else 'Admin access removed.' end) || case when change_reason is not null then ' Reason: ' || change_reason else '' end,
       auth.uid()
     );
   end if;

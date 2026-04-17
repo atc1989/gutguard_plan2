@@ -63,6 +63,9 @@
       approval_status: row.approval_status || "approved",
       notes: row.notes || "",
       approved_at: row.approved_at || null,
+      approved_by: row.approved_by || null,
+      approved_by_email: row.approved_by_email || "",
+      approved_by_display_name: row.approved_by_display_name || "",
       created_at: row.created_at || null,
       updated_at: row.updated_at || null,
       latest_plan_id: row.latest_plan_id || null,
@@ -86,6 +89,16 @@
       latest_plan_updated_at: row.latest_plan_updated_at || null,
       can_link_as_parent: row.can_link_as_parent === true
     };
+  }
+
+  function getRolePriority(roleType) {
+    return {
+      member: 1,
+      leader: 2,
+      squad: 3,
+      platoon: 4,
+      o1: 5
+    }[roleType] || 0;
   }
 
   function summarizeChildPlan(plan, weekRows) {
@@ -192,6 +205,52 @@
     }
 
     return normalizeProfileRow(result.data);
+  }
+
+  async function inferMyRoleHint() {
+    var client = getClientOrThrow();
+    var user = await getUserOrThrow();
+    var candidates = [];
+
+    try {
+      var planResult = await client
+        .from("plans")
+        .select("role_type")
+        .eq("user_id", user.id);
+
+      if (!planResult.error) {
+        (planResult.data || []).forEach(function (row) {
+          if (row && row.role_type) {
+            candidates.push(String(row.role_type));
+          }
+        });
+      }
+    } catch (error) {}
+
+    if (user.email) {
+      try {
+        var directoryResult = await client
+          .from("hierarchy_link_directory")
+          .select("role_type")
+          .eq("active", true)
+          .ilike("email", user.email);
+
+        if (!directoryResult.error) {
+          (directoryResult.data || []).forEach(function (row) {
+            if (row && row.role_type) {
+              candidates.push(String(row.role_type));
+            }
+          });
+        }
+      } catch (error) {}
+    }
+
+    return candidates.reduce(function (bestRole, roleType) {
+      if (getRolePriority(roleType) > getRolePriority(bestRole)) {
+        return roleType;
+      }
+      return bestRole;
+    }, "");
   }
 
   async function syncMyProfile(profile) {
@@ -528,6 +587,7 @@
     listPlans: listPlans,
     listReviewQueue: listReviewQueue,
     getMyProfile: getMyProfile,
+    inferMyRoleHint: inferMyRoleHint,
     syncMyProfile: syncMyProfile,
     listPotentialParents: listPotentialParents,
     listChildPlans: listChildPlans,

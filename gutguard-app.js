@@ -10,6 +10,7 @@ var activityFeedCache = {userId:null, items:null};
 var adminProfilesCache = {userId:null, profiles:null};
 var userDirectoryCache = {userId:null, profiles:null};
 var visibleAdminProfiles = [];
+var adminProfileFeedback = {};
 var PARENT_ROLE = {member:'leader',leader:'squad',squad:'platoon',platoon:'o1',o1:null};
 function makePlanMeta(){return {planId:null,status:'submitted',lastSavedAt:null};}
 var planMeta = {
@@ -140,6 +141,12 @@ function formatSavedAt(value){
   if(isNaN(d.getTime()))return '';
   return d.toLocaleString();
 }
+function getSiteConfig(){
+  return window.__GUTGUARD_SITE_CONFIG||{};
+}
+function getCalendarWindowNote(){
+  return getSiteConfig().calendarWindowNote||'Use the current 90-day execution window configured for this rollout.';
+}
 function getRoleLabel(roleType){
   return TYPE_LABEL[roleType]||roleType||'';
 }
@@ -164,6 +171,10 @@ function hasCurrentUserFullAccess(){
 function isCurrentUserAdmin(){
   return !!(hasCurrentUserFullAccess()&&currentUserProfile&&currentUserProfile.is_admin===true);
 }
+function getSupabaseSetupMessage(actionLabel){
+  var actionText=actionLabel||'use protected features';
+  return 'Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to .env.local, restart npm run dev, then refresh to '+actionText+'.';
+}
 function getCurrentUserAccessMessage(actionLabel){
   var actionText=actionLabel||'use the planner';
   if(!currentUser){
@@ -173,18 +184,113 @@ function getCurrentUserAccessMessage(actionLabel){
     return 'Your account profile is still syncing. Refresh in a moment.';
   }
   if(!isCurrentUserVerified()){
-    return 'Verify your email before you can '+actionText+'.';
+    return 'Verify your email first, then sign in again before you can '+actionText+'.';
   }
   if(currentUserProfile.is_active===false){
     return 'This account is inactive. Ask an admin to reactivate it.';
   }
   if(getCurrentUserApprovalStatus()==='pending'){
-    return 'Your account is waiting for admin approval before you can '+actionText+'.';
+    return 'Your account is waiting for admin approval before you can '+actionText+'. An approved admin can unlock it under Operations > Admin Directory. If this is the first admin account, bootstrap it once in Supabase SQL Editor.';
   }
   if(getCurrentUserApprovalStatus()==='rejected'){
-    return 'Your account has been rejected. Ask an admin to review your access.';
+    return 'Your account has been rejected. Ask an admin to review your access under Operations > Admin Directory.';
   }
   return '';
+}
+function getStatusTone(tone){
+  if(tone==='success')return 'success';
+  if(tone==='error'||tone==='danger')return 'error';
+  if(tone==='loading'||tone==='pending'||tone==='warn')return tone==='warn'?'warn':'loading';
+  return 'info';
+}
+function getApprovalTone(status){
+  if(status==='approved')return 'success';
+  if(status==='rejected')return 'error';
+  return 'loading';
+}
+function getApprovalLabel(status){
+  if(status==='approved')return 'Approved';
+  if(status==='rejected')return 'Rejected';
+  return 'Pending Approval';
+}
+function getApprovedAtDisplay(profile){
+  if(profile&&profile.approved_at){
+    return formatSavedAt(profile.approved_at);
+  }
+  if(profile&&profile.approval_status==='approved'){
+    return 'Approved status set, timestamp missing';
+  }
+  return 'Not approved yet';
+}
+function invalidateOperationsCaches(){
+  var userId=currentUser&&currentUser.id?currentUser.id:null;
+  adminProfilesCache={userId:userId,profiles:null};
+  userDirectoryCache={userId:userId,profiles:null};
+  dashboardCache={userId:userId,data:null};
+  activityFeedCache={userId:userId,items:null};
+}
+async function refreshOperationsPanels(forceRefresh){
+  await renderAdminDirectory(!!forceRefresh);
+  await renderDashboardSummary(!!forceRefresh);
+  await renderUserDirectory(!!forceRefresh);
+  await renderActivityFeed(!!forceRefresh);
+}
+function setAdminProfileFeedback(userId, message, tone, detail){
+  if(!userId)return;
+  adminProfileFeedback[userId]={
+    message:message||'',
+    tone:getStatusTone(tone),
+    detail:detail||'',
+    updated_at:new Date().toISOString()
+  };
+}
+function getAdminProfileFeedback(userId){
+  return userId&&adminProfileFeedback[userId]?adminProfileFeedback[userId]:null;
+}
+function updateAdminProfileFeedbackRegion(userId){
+  var region=document.getElementById('admin-feedback-'+userId);
+  if(!region)return;
+  var feedback=getAdminProfileFeedback(userId);
+  region.className='admin-profile-feedback'+(feedback?' is-'+feedback.tone:'');
+  clearNode(region);
+  if(!feedback||!feedback.message){
+    region.style.display='none';
+    return;
+  }
+  var title=document.createElement('div');
+  title.className='admin-profile-feedback-title';
+  title.textContent=feedback.message;
+  region.appendChild(title);
+  if(feedback.detail){
+    var detail=document.createElement('div');
+    detail.className='admin-profile-feedback-detail';
+    detail.textContent=feedback.detail;
+    region.appendChild(detail);
+  }
+  region.style.display='block';
+}
+function setAdminApprovalValue(userId,nextStatus){
+  var approvalEl=document.getElementById('admin-approval-'+userId);
+  if(approvalEl)approvalEl.value=nextStatus;
+}
+function buildStatusPill(text, tone){
+  var pill=document.createElement('span');
+  pill.className='admin-status-pill is-'+getStatusTone(tone);
+  pill.textContent=text;
+  return pill;
+}
+function buildAdminMetaItem(label,value){
+  var item=document.createElement('div');
+  item.className='admin-profile-meta-item';
+  var metaLabel=document.createElement('span');
+  metaLabel.className='admin-profile-meta-label';
+  metaLabel.textContent=label;
+  var metaValue=document.createElement('span');
+  metaValue.className='admin-profile-meta-value';
+  metaValue.textContent=value;
+  item.appendChild(metaLabel);
+  item.appendChild(metaValue);
+  return item;
 }
 function getDiagnosticStore(){
   if(!window.__gutguardDiagnostics){
@@ -258,11 +364,20 @@ function setSelectMessage(selectEl,message){
   option.textContent=message;
   selectEl.appendChild(option);
 }
-function setSavedPlansMessage(listEl,message){
+function setSavedPlansMessage(listEl,message,tone,detail){
   clearNode(listEl);
   var empty=document.createElement('div');
-  empty.className='saved-plan-empty';
-  empty.textContent=message;
+  empty.className='saved-plan-empty is-'+getStatusTone(tone);
+  var title=document.createElement('div');
+  title.className='saved-plan-empty-title';
+  title.textContent=message;
+  empty.appendChild(title);
+  if(detail){
+    var meta=document.createElement('div');
+    meta.className='saved-plan-empty-detail';
+    meta.textContent=detail;
+    empty.appendChild(meta);
+  }
   listEl.appendChild(empty);
 }
 function getParentSelectState(type){
@@ -440,6 +555,7 @@ function resetSavedPlansCache(){
   adminProfilesCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
   userDirectoryCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
   visibleAdminProfiles=[];
+  adminProfileFeedback={};
 }
 
 function getCurrentUserMetadata(user){
@@ -513,6 +629,20 @@ async function fetchCurrentUserProfile(forceRefresh){
     }
     if(Object.keys(syncPayload).length){
       profile = await window.GutguardPlanApi.syncMyProfile(syncPayload);
+    }
+  }
+  if(
+    window.GutguardPlanApi.syncMyProfile &&
+    window.GutguardPlanApi.inferMyRoleHint &&
+    !currentUserMetadata.role_type &&
+    (!profile || !profile.role_type || profile.role_type === 'member')
+  ) {
+    var inferredRoleType = await window.GutguardPlanApi.inferMyRoleHint();
+    if(inferredRoleType && inferredRoleType !== (profile&&profile.role_type||'')) {
+      profile = await window.GutguardPlanApi.syncMyProfile({
+        role_type: inferredRoleType,
+        display_name: currentUserMetadata.display_name || (profile&&profile.display_name) || ''
+      });
     }
   }
   currentUserProfile=profile||null;
@@ -650,173 +780,9 @@ function buildUserDirectoryCard(profile){
   return card;
 }
 function buildAdminProfileCard(profile){
-  var card=document.createElement('div');
-  card.className='admin-profile-card';
-  card.dataset.userId=profile.user_id;
-
-  var top=document.createElement('div');
-  top.className='admin-profile-top';
-  var info=document.createElement('div');
-  var name=document.createElement('div');
-  name.className='admin-profile-name';
-  name.textContent=profile.display_name||'(No Name)';
-  info.appendChild(name);
-  var email=document.createElement('div');
-  email.className='admin-profile-email';
-  email.textContent=profile.email||'';
-  info.appendChild(email);
-  top.appendChild(info);
-  var badge=document.createElement('div');
-  badge.className='admin-profile-badge';
-  badge.textContent=getRoleLabel(profile.role_type);
-  top.appendChild(badge);
-  card.appendChild(top);
-
-  var grid=document.createElement('div');
-  grid.className='admin-profile-grid';
-
-  var displayField=document.createElement('div');
-  displayField.className='admin-profile-field';
-  var displayLabel=document.createElement('label');
-  displayLabel.textContent='Display Name';
-  var displayInput=document.createElement('input');
-  displayInput.type='text';
-  displayInput.value=profile.display_name||'';
-  displayInput.id='admin-display-name-'+profile.user_id;
-  displayField.appendChild(displayLabel);
-  displayField.appendChild(displayInput);
-  grid.appendChild(displayField);
-
-  var roleField=document.createElement('div');
-  roleField.className='admin-profile-field';
-  var roleLabel=document.createElement('label');
-  roleLabel.textContent='Role';
-  var roleSelect=document.createElement('select');
-  roleSelect.id='admin-role-type-'+profile.user_id;
-  ['member','leader','squad','platoon','o1'].forEach(function(roleType){
-    var option=document.createElement('option');
-    option.value=roleType;
-    option.textContent=getRoleLabel(roleType);
-    option.selected=profile.role_type===roleType;
-    roleSelect.appendChild(option);
-  });
-  roleField.appendChild(roleLabel);
-  roleField.appendChild(roleSelect);
-  grid.appendChild(roleField);
-
-  var activeField=document.createElement('div');
-  activeField.className='admin-profile-field';
-  var activeLabel=document.createElement('label');
-  activeLabel.textContent='Active';
-  var activeSelect=document.createElement('select');
-  activeSelect.id='admin-active-'+profile.user_id;
-  ['true','false'].forEach(function(flag){
-    var option=document.createElement('option');
-    option.value=flag;
-    option.textContent=flag==='true'?'Active':'Inactive';
-    option.selected=String(profile.is_active)!=='false'?flag==='true':flag==='false';
-    activeSelect.appendChild(option);
-  });
-  activeField.appendChild(activeLabel);
-  activeField.appendChild(activeSelect);
-  grid.appendChild(activeField);
-
-  var approvalField=document.createElement('div');
-  approvalField.className='admin-profile-field';
-  var approvalLabel=document.createElement('label');
-  approvalLabel.textContent='Approval';
-  var approvalSelect=document.createElement('select');
-  approvalSelect.id='admin-approval-'+profile.user_id;
-  ['pending','approved','rejected'].forEach(function(status){
-    var option=document.createElement('option');
-    option.value=status;
-    option.textContent=status.charAt(0).toUpperCase()+status.slice(1);
-    option.selected=(profile.approval_status||'approved')===status;
-    approvalSelect.appendChild(option);
-  });
-  approvalField.appendChild(approvalLabel);
-  approvalField.appendChild(approvalSelect);
-  grid.appendChild(approvalField);
-
-  var adminField=document.createElement('div');
-  adminField.className='admin-profile-field';
-  var adminLabel=document.createElement('label');
-  adminLabel.textContent='Admin Access';
-  var adminSelect=document.createElement('select');
-  adminSelect.id='admin-is-admin-'+profile.user_id;
-  ['false','true'].forEach(function(flag){
-    var option=document.createElement('option');
-    option.value=flag;
-    option.textContent=flag==='true'?'Admin':'Standard';
-    option.selected=profile.is_admin===true?flag==='true':flag==='false';
-    adminSelect.appendChild(option);
-  });
-  adminField.appendChild(adminLabel);
-  adminField.appendChild(adminSelect);
-  grid.appendChild(adminField);
-
-  var latestField=document.createElement('div');
-  latestField.className='admin-profile-field';
-  var latestLabel=document.createElement('label');
-  latestLabel.textContent='Latest Plan';
-  var latestInput=document.createElement('input');
-  latestInput.type='text';
-  latestInput.disabled=true;
-  latestInput.value=profile.latest_plan_id
-    ?((profile.latest_plan_status||'draft')+' | '+formatSavedAt(profile.latest_plan_updated_at))
-    :'No plan yet';
-  latestField.appendChild(latestLabel);
-  latestField.appendChild(latestInput);
-  grid.appendChild(latestField);
-
-  var approvedField=document.createElement('div');
-  approvedField.className='admin-profile-field';
-  var approvedLabel=document.createElement('label');
-  approvedLabel.textContent='Approved At';
-  var approvedInput=document.createElement('input');
-  approvedInput.type='text';
-  approvedInput.disabled=true;
-  approvedInput.value=profile.approved_at?formatSavedAt(profile.approved_at):'Not approved yet';
-  approvedField.appendChild(approvedLabel);
-  approvedField.appendChild(approvedInput);
-  grid.appendChild(approvedField);
-
-  var notesField=document.createElement('div');
-  notesField.className='admin-profile-field admin-profile-field-wide';
-  var notesLabel=document.createElement('label');
-  notesLabel.textContent='Notes';
-  var notesInput=document.createElement('textarea');
-  notesInput.id='admin-notes-'+profile.user_id;
-  notesInput.value=profile.notes||'';
-  notesField.appendChild(notesLabel);
-  notesField.appendChild(notesInput);
-  grid.appendChild(notesField);
-
-  card.appendChild(grid);
-
-  var actions=document.createElement('div');
-  actions.className='admin-profile-actions';
-  var saveBtn=document.createElement('button');
-  saveBtn.className='btn btp';
-  saveBtn.type='button';
-  saveBtn.textContent='Save';
-  saveBtn.addEventListener('click',function(){
-    saveAdminProfile(profile.user_id);
-  });
-  actions.appendChild(saveBtn);
-  if(profile.latest_plan_id){
-    var openBtn=document.createElement('button');
-    openBtn.className='btn bto';
-    openBtn.type='button';
-    openBtn.textContent='Open Latest Plan';
-    openBtn.addEventListener('click',function(){
-      openSavedPlan(profile.latest_plan_id, profile.role_type);
-    });
-    actions.appendChild(openBtn);
-  }
-  card.appendChild(actions);
-
-  return card;
+  return window.GutguardAdmin&&window.GutguardAdmin.buildAdminProfileCard
+    ?window.GutguardAdmin.buildAdminProfileCard(profile)
+    :document.createElement('div');
 }
 function filterSavedPlans(plans){
   var roleEl=document.getElementById('saved-plans-filter');
@@ -957,7 +923,7 @@ function updateSaveStatus(type, state){
     detail=state.detail||'';
   }else if(!apiReady){
     tone='n-danger';
-    message='Supabase is not configured yet. Set your project URL and anon key in .env.local or supabase-config.js before saving.';
+    message='Supabase is not configured yet. Set your project URL and anon key in .env.local before saving.';
   }else if(!currentUser){
     tone='n-danger';
     message='Sign in first. Save, load, and saved-plan browsing are protected by Supabase auth and RLS.';
@@ -1460,7 +1426,7 @@ function renderAuthState(){
   if(!(window.GutguardSupabase&&window.GutguardSupabase.isConfigured&&window.GutguardSupabase.isConfigured())){
     if(credentialsEl) credentialsEl.style.display='flex';
     if(signedInEl) signedInEl.style.display='none';
-    if(accessStateEl) accessStateEl.textContent='Configure Supabase in .env.local or supabase-config.js to enable protected access.';
+    if(accessStateEl) accessStateEl.textContent=getSupabaseSetupMessage('enable protected access');
     if(dashboardWrap) dashboardWrap.style.display='none';
     if(myProfileWrap) myProfileWrap.style.display='none';
     if(userDirectoryWrap) userDirectoryWrap.style.display='block';
@@ -1524,7 +1490,7 @@ async function renderDashboardSummary(forceRefresh){
   if(!container)return;
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.getDashboardSummary&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
     clearNode(container);
-    container.appendChild(buildDashboardStatCard({label:'Accounts',value:'-',meta:'Configure Supabase first'}));
+    container.appendChild(buildDashboardStatCard({label:'Accounts',value:'-',meta:getSupabaseSetupMessage('load dashboard metrics')}));
     return;
   }
   if(!currentUser){
@@ -1536,6 +1502,10 @@ async function renderDashboardSummary(forceRefresh){
     clearNode(container);
     container.appendChild(buildDashboardStatCard({label:'Dashboard',value:'Hidden',meta:'Admin access is required for system-wide metrics.'}));
     return;
+  }
+  if(forceRefresh||!dashboardCache.data){
+    clearNode(container);
+    container.appendChild(buildDashboardStatCard({label:'Dashboard',value:'Loading',meta:'Refreshing admin metrics from Supabase...'}));
   }
   try{
     var summary=await fetchDashboardSummary(!!forceRefresh);
@@ -1558,7 +1528,7 @@ async function renderActivityFeed(forceRefresh){
   var listEl=document.getElementById('activity-feed-list');
   if(!listEl)return;
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.listPlanActivity&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
-    setSavedPlansMessage(listEl,'Configure Supabase in .env.local or supabase-config.js to load recent activity.');
+    setSavedPlansMessage(listEl,getSupabaseSetupMessage('load recent activity'),'error');
     return;
   }
   if(!currentUser){
@@ -1569,11 +1539,21 @@ async function renderActivityFeed(forceRefresh){
     setSavedPlansMessage(listEl,getCurrentUserAccessMessage('load the recent activity feed'));
     return;
   }
+  if(forceRefresh||!Array.isArray(activityFeedCache.items)){
+    setSavedPlansMessage(listEl,'Loading recent activity...','loading','Pulling the latest audit entries from Supabase.');
+  }
   try{
     var items=await fetchActivityFeed(!!forceRefresh);
     var filteredItems=filterActivityItems(items);
     if(!filteredItems.length){
-      setSavedPlansMessage(listEl,items.length?'No recent activity matched the current filter.':'No recent activity has been recorded yet.');
+      setSavedPlansMessage(
+        listEl,
+        items.length?'No recent activity matched the current filter.':'No recent activity has been recorded yet.',
+        'info',
+        items.length
+          ?'Try clearing one of the activity filters.'
+          :'Account approvals, profile edits, and plan saves will start showing here once the workspace is active.'
+      );
       return;
     }
     clearNode(listEl);
@@ -1582,7 +1562,7 @@ async function renderActivityFeed(forceRefresh){
     });
   }catch(err){
     reportClientIssue('renderActivityFeed', err);
-    setSavedPlansMessage(listEl,'Failed to load recent activity. '+(err&&err.message?err.message:'Unknown error.'));
+    setSavedPlansMessage(listEl,'Failed to load recent activity.','error',err&&err.message?err.message:'Unknown error.');
   }
 }
 async function renderUserDirectory(forceRefresh){
@@ -1591,7 +1571,7 @@ async function renderUserDirectory(forceRefresh){
   if(!wrap||!listEl)return;
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.listDirectoryProfiles&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
     wrap.style.display='block';
-    setSavedPlansMessage(listEl,'Configure Supabase in .env.local or supabase-config.js to load the user directory.');
+    setSavedPlansMessage(listEl,getSupabaseSetupMessage('load the user directory'),'error');
     return;
   }
   if(!currentUser){
@@ -1605,11 +1585,21 @@ async function renderUserDirectory(forceRefresh){
     return;
   }
   wrap.style.display='block';
+  if(forceRefresh||!Array.isArray(userDirectoryCache.profiles)){
+    setSavedPlansMessage(listEl,'Loading approved users...','loading','Fetching the latest approved directory records from Supabase.');
+  }
   try{
     var profiles=await fetchUserDirectory(!!forceRefresh);
     var filteredProfiles=filterUserDirectoryProfiles(profiles);
     if(!filteredProfiles.length){
-      setSavedPlansMessage(listEl,profiles.length?'No approved users matched the current directory filter.':'No approved users are ready to show yet.');
+      setSavedPlansMessage(
+        listEl,
+        profiles.length?'No approved users matched the current directory filter.':'No approved users are ready to show yet.',
+        'info',
+        profiles.length
+          ?'Try clearing the directory search or role filter.'
+          :'Approved and email-verified users will appear here after they save their first role-aligned plan.'
+      );
       return;
     }
     clearNode(listEl);
@@ -1618,81 +1608,18 @@ async function renderUserDirectory(forceRefresh){
     });
   }catch(err){
     reportClientIssue('renderUserDirectory', err);
-    setSavedPlansMessage(listEl,'Failed to load the user directory. '+(err&&err.message?err.message:'Unknown error.'));
+    setSavedPlansMessage(listEl,'Failed to load the user directory.','error',err&&err.message?err.message:'Unknown error.');
   }
 }
 function filterAdminProfiles(profiles){
-  var searchEl=document.getElementById('admin-profiles-search');
-  var roleEl=document.getElementById('admin-profiles-role');
-  var approvalEl=document.getElementById('admin-profiles-approval');
-  var adminEl=document.getElementById('admin-profiles-admin');
-  var sortEl=document.getElementById('admin-profiles-sort');
-  var searchTerm=searchEl&&searchEl.value?searchEl.value.trim().toLowerCase():'';
-  var roleFilter=roleEl&&roleEl.value?roleEl.value:'';
-  var approvalFilter=approvalEl&&approvalEl.value?approvalEl.value:'';
-  var adminFilter=adminEl&&adminEl.value?adminEl.value:'';
-  var filtered=(profiles||[]).filter(function(profile){
-    if(roleFilter&&profile.role_type!==roleFilter)return false;
-    if(approvalFilter&&(profile.approval_status||'')!==approvalFilter)return false;
-    if(adminFilter==='admin'&&profile.is_admin!==true)return false;
-    if(adminFilter==='standard'&&profile.is_admin===true)return false;
-    if(!searchTerm)return true;
-    var haystack=[
-      profile.email||'',
-      profile.display_name||'',
-      profile.role_type||'',
-      profile.approval_status||'',
-      profile.is_admin?'admin':'',
-      profile.notes||''
-    ].join(' ').toLowerCase();
-    return haystack.indexOf(searchTerm)!==-1;
-  });
-  var sortMode=sortEl&&sortEl.value?sortEl.value:'name';
-  filtered.sort(function(a,b){
-    if(sortMode==='newest'){
-      return getTimeValue(b.created_at)-getTimeValue(a.created_at);
-    }
-    if(sortMode==='latest-plan'){
-      return getTimeValue(b.latest_plan_updated_at)-getTimeValue(a.latest_plan_updated_at);
-    }
-    if(sortMode==='pending-first'){
-      var aPending=(a.approval_status||'')==='pending'?0:1;
-      var bPending=(b.approval_status||'')==='pending'?0:1;
-      if(aPending!==bPending)return aPending-bPending;
-    }
-    return String(a.display_name||a.email||'').localeCompare(String(b.display_name||b.email||''));
-  });
-  return filtered;
+  return window.GutguardAdmin&&window.GutguardAdmin.filterAdminProfiles
+    ?window.GutguardAdmin.filterAdminProfiles(profiles)
+    :(profiles||[]);
 }
 async function renderAdminDirectory(forceRefresh){
-  var wrap=document.getElementById('admin-directory-wrap');
-  var listEl=document.getElementById('admin-profiles-list');
-  if(!wrap||!listEl)return;
-  if(!currentUser||!isCurrentUserAdmin()){
-    wrap.style.display='none';
-    return;
-  }
-  wrap.style.display='block';
-  if(!(window.GutguardPlanApi&&window.GutguardPlanApi.listUserProfiles)){
-    setSavedPlansMessage(listEl,'Admin directory helpers are unavailable.');
-    return;
-  }
-  try{
-    var profiles=await fetchAdminProfiles(!!forceRefresh);
-    var filteredProfiles=filterAdminProfiles(profiles);
-    visibleAdminProfiles=filteredProfiles.slice();
-    if(!filteredProfiles.length){
-      setSavedPlansMessage(listEl,profiles.length?'No user profiles matched the current filter.':'No user profiles are available yet.');
-      return;
-    }
-    clearNode(listEl);
-    filteredProfiles.forEach(function(profile){
-      listEl.appendChild(buildAdminProfileCard(profile));
-    });
-  }catch(err){
-    reportClientIssue('renderAdminDirectory', err);
-    setSavedPlansMessage(listEl,'Failed to load the admin directory. '+(err&&err.message?err.message:'Unknown error.'));
-  }
+  return window.GutguardAdmin&&window.GutguardAdmin.renderAdminDirectory
+    ?window.GutguardAdmin.renderAdminDirectory(forceRefresh)
+    :Promise.resolve();
 }
 async function refreshDashboard(forceRefresh){
   await renderDashboardSummary(!!forceRefresh);
@@ -1741,9 +1668,9 @@ async function handleSignIn(){
     renderAuthState();
     refreshSavedPlans(true);
     refreshHomeOperations(true);
-    showToast('Signed in as '+getCurrentUserEmail()+'.');
+    showToast('Signed in as '+getCurrentUserEmail()+'.','success');
   }catch(err){
-    showToast(err&&err.message?err.message:'Sign in failed.');
+    showToast(err&&err.message?err.message:'Sign in failed.','error');
   }
 }
 function handleAuthSubmit(event){
@@ -1769,10 +1696,10 @@ async function handleSignUp(){
     refreshSavedPlans(true);
     refreshHomeOperations(true);
     showToast(currentUser
-      ?'Account created. Verify your email, then wait for admin approval before protected access unlocks.'
-      :'Account created. Check your email for the verification link.');
+      ?'Account created. Verify your email, then wait for admin approval. After the first admin is bootstrapped, future approvals happen in Operations > Admin Directory.'
+      :'Account created. Check your email for the verification link.','success');
   }catch(err){
-    showToast(err&&err.message?err.message:'Sign up failed.');
+    showToast(err&&err.message?err.message:'Sign up failed.','error');
   }
 }
 async function handleSignOut(){
@@ -1784,14 +1711,14 @@ async function handleSignOut(){
     renderAuthState();
     refreshSavedPlans(true);
     refreshHomeOperations(true);
-    showToast('Signed out.');
+    showToast('Signed out.','success');
   }catch(err){
-    showToast(err&&err.message?err.message:'Sign out failed.');
+    showToast(err&&err.message?err.message:'Sign out failed.','error');
   }
 }
 async function saveMyProfile(){
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.syncMyProfile)){
-    showToast('Profile helpers are unavailable.');
+    showToast('Profile helpers are unavailable.','error');
     return;
   }
   try{
@@ -1807,88 +1734,31 @@ async function saveMyProfile(){
       await populateParentOptions(curType);
       refreshSubmitButtonState(curType);
     }
-    showToast('Profile saved.');
+    showToast('Profile saved.','success');
   }catch(err){
     reportClientIssue('saveMyProfile', err);
-    showToast(err&&err.message?err.message:'Unable to save your profile.');
+    showToast(err&&err.message?err.message:'Unable to save your profile.','error');
   }
 }
-async function saveAdminProfile(userId){
-  if(!(window.GutguardPlanApi&&window.GutguardPlanApi.adminUpdateUserProfile)){
-    showToast('Admin profile helpers are unavailable.');
-    return;
-  }
-  try{
-    await window.GutguardPlanApi.adminUpdateUserProfile(userId,{
-      display_name:document.getElementById('admin-display-name-'+userId).value.trim(),
-      role_type:document.getElementById('admin-role-type-'+userId).value,
-      is_admin:document.getElementById('admin-is-admin-'+userId).value==='true',
-      is_active:document.getElementById('admin-active-'+userId).value==='true',
-      approval_status:document.getElementById('admin-approval-'+userId).value,
-      notes:document.getElementById('admin-notes-'+userId).value.trim()
-    });
-    adminProfilesCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
-    userDirectoryCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
-    dashboardCache={userId:currentUser&&currentUser.id?currentUser.id:null,data:null};
-    activityFeedCache={userId:currentUser&&currentUser.id?currentUser.id:null,items:null};
-    if(currentUser&&userId===currentUser.id){
-      await fetchCurrentUserProfile(true).catch(function(){});
-      renderAuthState();
-    }
-    await renderAdminDirectory(true);
-    await renderDashboardSummary(true);
-    await renderUserDirectory(true);
-    await renderActivityFeed(true);
-    showToast('User profile updated.');
-  }catch(err){
-    reportClientIssue('saveAdminProfile', err, {userId:userId});
-    showToast(err&&err.message?err.message:'Unable to update the user profile.');
-  }
+async function saveAdminProfile(userId, options){
+  return window.GutguardAdmin&&window.GutguardAdmin.saveAdminProfile
+    ?window.GutguardAdmin.saveAdminProfile(userId, options)
+    :Promise.resolve();
 }
 async function bulkUpdateVisibleProfiles(nextStatus){
-  if(!isCurrentUserAdmin()){
-    showToast('Admin access is required.');
-    return;
-  }
-  var targets=(visibleAdminProfiles||[]).filter(function(profile){
-    return (profile.approval_status||'')==='pending';
-  });
-  if(!targets.length){
-    showToast('No visible pending accounts matched the current admin filter.');
-    return;
-  }
-  if(!confirm((nextStatus==='approved'?'Approve ':'Reject ')+targets.length+' visible pending account(s)?')) return;
-  try{
-    for(var index=0;index<targets.length;index+=1){
-      var profile=targets[index];
-      await window.GutguardPlanApi.adminUpdateUserProfile(profile.user_id,{
-        display_name:profile.display_name,
-        role_type:profile.role_type,
-        is_admin:profile.is_admin===true,
-        is_active:profile.is_active!==false,
-        approval_status:nextStatus,
-        notes:profile.notes||''
-      });
-    }
-    adminProfilesCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
-    userDirectoryCache={userId:currentUser&&currentUser.id?currentUser.id:null,profiles:null};
-    dashboardCache={userId:currentUser&&currentUser.id?currentUser.id:null,data:null};
-    activityFeedCache={userId:currentUser&&currentUser.id?currentUser.id:null,items:null};
-    await renderAdminDirectory(true);
-    await renderDashboardSummary(true);
-    await renderUserDirectory(true);
-    await renderActivityFeed(true);
-    showToast('Updated '+targets.length+' account(s).');
-  }catch(err){
-    reportClientIssue('bulkUpdateVisibleProfiles', err, {nextStatus:nextStatus});
-    showToast(err&&err.message?err.message:'Bulk update failed.');
-  }
+  return window.GutguardAdmin&&window.GutguardAdmin.bulkUpdateVisibleProfiles
+    ?window.GutguardAdmin.bulkUpdateVisibleProfiles(nextStatus)
+    :Promise.resolve();
 }
 function bulkApprovePendingProfiles(){
-  return bulkUpdateVisibleProfiles('approved');
+  return window.GutguardAdmin&&window.GutguardAdmin.bulkApprovePendingProfiles
+    ?window.GutguardAdmin.bulkApprovePendingProfiles()
+    :bulkUpdateVisibleProfiles('approved');
 }
 function bulkRejectPendingProfiles(){
-  return bulkUpdateVisibleProfiles('rejected');
+  return window.GutguardAdmin&&window.GutguardAdmin.bulkRejectPendingProfiles
+    ?window.GutguardAdmin.bulkRejectPendingProfiles()
+    :bulkUpdateVisibleProfiles('rejected');
 }
 async function populateParentOptions(type, selectedPlanId){
   var selectEl=document.getElementById(type+'-parent-plan-id');
@@ -2009,7 +1879,7 @@ function syncInteractiveAccessibility(root){
 
 async function startForm(type, explicitPlanId){
   if(currentUser&&!hasCurrentUserFullAccess()){
-    showToast(getCurrentUserAccessMessage('open the planner'));
+    showToast(getCurrentUserAccessMessage('open the planner'),'warn');
     return;
   }
   curType=type; curWeek=1;
@@ -2089,7 +1959,7 @@ async function renderSavedPlans(forceRefresh){
   var listEl=document.getElementById('saved-plans-list');
   if(!listEl)return;
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
-    setSavedPlansMessage(listEl,'Configure Supabase in .env.local or supabase-config.js to browse saved plans.');
+    setSavedPlansMessage(listEl,getSupabaseSetupMessage('browse saved plans'),'error');
     renderSavedPlanStats([],[]);
     return;
   }
@@ -2104,14 +1974,14 @@ async function renderSavedPlans(forceRefresh){
     return;
   }
   if(forceRefresh||!Array.isArray(savedPlansCache.plans)){
-    setSavedPlansMessage(listEl,'Loading saved plans from Supabase...');
+    setSavedPlansMessage(listEl,'Loading saved plans...','loading','Fetching the latest saved plans from Supabase.');
   }
   try{
     var allPlans=await fetchSavedPlans(!!forceRefresh);
     var plans=filterSavedPlans(allPlans);
     renderSavedPlanStats(allPlans,plans);
     if(!plans.length){
-      setSavedPlansMessage(listEl,'No saved plans found for the current filter.');
+      setSavedPlansMessage(listEl,'No saved plans found for the current filter.','info');
       return;
     }
     clearNode(listEl);
@@ -2119,7 +1989,7 @@ async function renderSavedPlans(forceRefresh){
       listEl.appendChild(buildSavedPlanCard(plan));
     });
   }catch(err){
-    setSavedPlansMessage(listEl,'Failed to load saved plans. '+(err&&err.message?err.message:'Unknown error.'));
+    setSavedPlansMessage(listEl,'Failed to load saved plans.','error',err&&err.message?err.message:'Unknown error.');
     renderSavedPlanStats([],[]);
   }
 }
@@ -2136,7 +2006,7 @@ async function renderReviewQueue(forceRefresh){
   var listEl=document.getElementById('review-queue-list');
   if(!listEl)return;
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
-    setSavedPlansMessage(listEl,'Configure Supabase in .env.local or supabase-config.js to load the review queue.');
+    setSavedPlansMessage(listEl,getSupabaseSetupMessage('load the review queue'),'error');
     return;
   }
   if(!currentUser){
@@ -2147,10 +2017,13 @@ async function renderReviewQueue(forceRefresh){
     setSavedPlansMessage(listEl,getCurrentUserAccessMessage('review submitted child plans'));
     return;
   }
+  if(forceRefresh||!Array.isArray(reviewQueueCache.plans)){
+    setSavedPlansMessage(listEl,'Loading review queue...','loading','Checking Supabase for submitted child plans that need your decision.');
+  }
   try{
     var queue=await fetchReviewQueue(!!forceRefresh);
     if(!queue.length){
-      setSavedPlansMessage(listEl,'No submitted child plans are waiting in your review queue.');
+      setSavedPlansMessage(listEl,'No submitted child plans are waiting in your review queue.','info');
       return;
     }
     clearNode(listEl);
@@ -2158,7 +2031,7 @@ async function renderReviewQueue(forceRefresh){
       listEl.appendChild(buildReviewQueueCard(plan));
     });
   }catch(err){
-    setSavedPlansMessage(listEl,'Failed to load review queue. '+(err&&err.message?err.message:'Unknown error.'));
+    setSavedPlansMessage(listEl,'Failed to load review queue.','error',err&&err.message?err.message:'Unknown error.');
   }
 }
 async function refreshReviewQueue(forceRefresh){
@@ -2167,11 +2040,11 @@ async function refreshReviewQueue(forceRefresh){
 
 async function submitPlanReview(plan, nextStatus){
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.reviewPlanInSupabase)){
-    showToast('Supabase helpers are unavailable.');
+    showToast('Supabase helpers are unavailable.','error');
     return;
   }
   if(!hasCurrentUserFullAccess()){
-    showToast(getCurrentUserAccessMessage('review submitted plans'));
+    showToast(getCurrentUserAccessMessage('review submitted plans'),'warn');
     return;
   }
   var reviewNote='';
@@ -2179,7 +2052,7 @@ async function submitPlanReview(plan, nextStatus){
     reviewNote=prompt('Enter the revision note for "'+(plan.full_name||'Plan')+'".', plan.review_notes||'');
     if(reviewNote===null)return;
     if(!reviewNote.trim()){
-      showToast('A revision note is required.');
+      showToast('A revision note is required.','warn');
       return;
     }
   }else{
@@ -2190,22 +2063,22 @@ async function submitPlanReview(plan, nextStatus){
     await window.GutguardPlanApi.reviewPlanInSupabase(plan.id,nextStatus,reviewNote);
     resetSavedPlansCache();
     await refreshSavedPlans(true);
-    showToast('"'+(plan.full_name||'Plan')+'" marked as '+(nextStatus==='approved'?'approved.':'needs revision.'));
+    showToast('"'+(plan.full_name||'Plan')+'" marked as '+(nextStatus==='approved'?'approved.':'needs revision.'),nextStatus==='approved'?'success':'warn');
   }catch(err){
-    showToast(err&&err.message?err.message:'Failed to update review status.');
+    showToast(err&&err.message?err.message:'Failed to update review status.','error');
   }
 }
 async function duplicateSavedPlan(planId, roleType){
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.loadPlanFromSupabase&&window.GutguardPlanApi.savePlanToSupabase)){
-    showToast('Supabase helpers are unavailable.');
+    showToast('Supabase helpers are unavailable.','error');
     return;
   }
   if(!hasCurrentUserFullAccess()){
-    showToast(getCurrentUserAccessMessage('duplicate saved plans'));
+    showToast(getCurrentUserAccessMessage('duplicate saved plans'),'warn');
     return;
   }
   try{
-    showToast('Duplicating plan...');
+    showToast('Duplicating plan...','loading');
     var loaded=await window.GutguardPlanApi.loadPlanFromSupabase(planId);
     loaded.id=null;
     loaded.status='draft';
@@ -2213,14 +2086,14 @@ async function duplicateSavedPlan(planId, roleType){
     var duplicated=await window.GutguardPlanApi.savePlanToSupabase(loaded);
     resetSavedPlansCache();
     await refreshSavedPlans(true);
-    showToast('Created draft copy for "'+(duplicated.full_name||'Plan')+'".');
+    showToast('Created draft copy for "'+(duplicated.full_name||'Plan')+'".','success');
   }catch(err){
-    showToast(err&&err.message?err.message:'Failed to duplicate plan.');
+    showToast(err&&err.message?err.message:'Failed to duplicate plan.','error');
   }
 }
 async function deleteSavedPlan(planId, roleType){
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.deletePlanFromSupabase)){
-    showToast('Supabase helpers are unavailable.');
+    showToast('Supabase helpers are unavailable.','error');
     return;
   }
   if(!confirm('Delete this draft from Supabase? This will also remove its saved week and consolidation entries.')) return;
@@ -2238,9 +2111,9 @@ async function deleteSavedPlan(planId, roleType){
     }
     resetSavedPlansCache();
     await refreshSavedPlans(true);
-    showToast('Draft deleted from Supabase.');
+    showToast('Draft deleted from Supabase.','success');
   }catch(err){
-    showToast(err&&err.message?err.message:'Failed to delete draft.');
+    showToast(err&&err.message?err.message:'Failed to delete draft.','error');
   }
 }
 
@@ -2375,7 +2248,7 @@ function buildForm(type){
           <div class="pib" style="background:#061E45">
             <div class="pib-lbl">Calendar Start Date</div>
             <input type="date" id="${p}-cs" class="auto-today pib-inp" style="font-size:.9rem" oninput="renderCal('${p}');computeProjections('${p}')">
-            <div class="pib-note">April 5 - July 5, 2026</div>
+            <div class="pib-note">${getCalendarWindowNote()}</div>
           </div>
         </div>
         <div style="font-size:.6rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:.6rem">Computed Required Numbers (1 Pay-in = 5 Attendees, 1 Attendee = 4 Leads)</div>
@@ -2949,7 +2822,7 @@ async function loadSavedPlan(silent, explicitPlanId){
   }
   if(!(window.GutguardPlanApi&&window.GutguardPlanApi.isConfigured&&window.GutguardPlanApi.isConfigured())){
     updateSaveStatus(curType);
-    if(!silent)showToast('Configure Supabase before loading a saved plan.');
+    if(!silent)showToast(getSupabaseSetupMessage('load a saved plan'),'error');
     return;
   }
   var ref=explicitPlanId?{planId:explicitPlanId}:(window.GutguardPlanModel&&window.GutguardPlanModel.getStoredPlanRef?window.GutguardPlanModel.getStoredPlanRef(curType,getDraftScopeId()):null);
@@ -2983,7 +2856,7 @@ async function loadSavedPlan(silent, explicitPlanId){
   updateSaveStatus(curType);
   refreshDraftControls(curType);
   refreshSubmitButtonState(curType);
-  if(!silent)showToast('Loaded "'+(loaded.full_name||TYPE_LABEL[curType])+'".');
+  if(!silent)showToast('Loaded "'+(loaded.full_name||TYPE_LABEL[curType])+'".','success');
 }
 async function savePlan(mode){
   if(!curType)return;
@@ -3016,7 +2889,7 @@ async function savePlan(mode){
     refreshSavedPlans(true);
     updateSaveStatus(curType);
     refreshDraftControls(curType);
-    showToast('"'+(saved.full_name||'Plan')+'" '+(mode==='draft'?'saved as draft.':'submitted to Supabase.'));
+    showToast('"'+(saved.full_name||'Plan')+'" '+(mode==='draft'?'saved as draft.':'submitted to Supabase.'),'success');
   }catch(err){
     if(/Plan not found or not editable/i.test((err&&err.message)||'')&&window.GutguardPlanModel&&window.GutguardPlanModel.clearStoredPlanRef){
       window.GutguardPlanModel.clearStoredPlanRef(curType,getDraftScopeId());
@@ -3024,10 +2897,83 @@ async function savePlan(mode){
     }
     var friendlyError=getFriendlySaveError(err);
     updateSaveStatus(curType,{message:'Save failed. '+friendlyError,tone:'n-danger'});
-    showToast(friendlyError);
+    showToast(friendlyError,'error');
     reportClientIssue('savePlan', err, {mode:mode, role:curType});
   }
 }
+
+document.addEventListener('gutguard:action',function(event){
+  var payload=event&&event.detail?event.detail:{};
+  var type=payload.type||'';
+  var detail=payload.detail||{};
+  try{
+    switch(type){
+      case 'go-home':
+        goHome();
+        break;
+      case 'start-form':
+        startForm(detail.role);
+        break;
+      case 'submit-auth':
+        handleAuthSubmit();
+        break;
+      case 'sign-up':
+        handleSignUp();
+        break;
+      case 'sign-out':
+        handleSignOut();
+        break;
+      case 'save-my-profile':
+        saveMyProfile();
+        break;
+      case 'refresh-saved-plans':
+        refreshSavedPlans(!!detail.forceRefresh);
+        break;
+      case 'refresh-review-queue':
+        refreshReviewQueue(!!detail.forceRefresh);
+        break;
+      case 'refresh-dashboard':
+        refreshDashboard(!!detail.forceRefresh);
+        break;
+      case 'refresh-activity-feed':
+        refreshActivityFeed(!!detail.forceRefresh);
+        break;
+      case 'refresh-admin-directory':
+        refreshAdminDirectory(!!detail.forceRefresh);
+        break;
+      case 'refresh-user-directory':
+        refreshUserDirectory(!!detail.forceRefresh);
+        break;
+      case 'bulk-approve-pending-profiles':
+        bulkApprovePendingProfiles();
+        break;
+      case 'bulk-reject-pending-profiles':
+        bulkRejectPendingProfiles();
+        break;
+      default:
+        break;
+    }
+  }catch(err){
+    reportClientIssue('gutguard:action', err, payload);
+  }
+});
+document.addEventListener('gutguard:modal-action',function(event){
+  var payload=event&&event.detail?event.detail:{};
+  try{
+    switch(payload.type){
+      case 'close':
+        closeModal();
+        break;
+      case 'save':
+        saveSubMember();
+        break;
+      default:
+        break;
+    }
+  }catch(err){
+    reportClientIssue('gutguard:modal-action', err, payload);
+  }
+});
 bootstrapAuthState();
 syncInteractiveAccessibility(document);
 document.addEventListener('keydown',function(event){
@@ -3077,4 +3023,13 @@ window.GutguardDiagnostics={
     getDiagnosticStore().length=0;
   }
 };
-function showToast(msg){var t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2500);}
+function showToast(msg,tone){
+  var t=document.getElementById('toast');
+  if(!t)return;
+  t.textContent=msg;
+  t.className='toast show is-'+getStatusTone(tone);
+  clearTimeout(t._t);
+  t._t=setTimeout(function(){
+    t.classList.remove('show');
+  },getStatusTone(tone)==='error'?4200:2800);
+}

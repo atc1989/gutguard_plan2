@@ -11,6 +11,7 @@ export const legacyScriptPaths: Record<string, string> = {
   "supabase-config.js": path.join(projectRoot, "supabase-config.js"),
   "plan-model.js": path.join(projectRoot, "plan-model.js"),
   "plan-api.js": path.join(projectRoot, "plan-api.js"),
+  "gutguard-admin.js": path.join(projectRoot, "gutguard-admin.js"),
   "gutguard-app.js": path.join(projectRoot, "gutguard-app.js")
 };
 
@@ -18,5 +19,6 @@ export const legacyClientScriptNames = [
   "supabase-config.js",
   "plan-model.js",
   "plan-api.js",
+  "gutguard-admin.js",
   "gutguard-app.js"
 ] as const;
